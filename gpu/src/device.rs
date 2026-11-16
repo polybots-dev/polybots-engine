@@ -410,7 +410,7 @@ impl DeviceBatch {
         bytes: u64,
         threads_per_block: usize,
     ) -> Result<[u32; 2], String> {
-        if bytes < 4 * self.games as u64 || !on_device(actions) || actions % 4 != 0 {
+        if bytes < 4 * self.games as u64 || !on_device(actions) || !actions.is_multiple_of(4) {
             return Err("actions: one aligned i32 per slot in GPU 0 memory".into());
         }
         let mut word = [0u32; 2];

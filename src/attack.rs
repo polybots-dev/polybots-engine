@@ -40,6 +40,7 @@ fn remove_effect(g: &mut Game, node: u32, effect: i64) -> Result<(), String> {
 /// Attack options at a position with their state writes (the relation lookup for
 /// an invisible foreign unit, the peace checks, a capturer's city-owner checks): the targets around
 /// `center` that `unit` (attacking for `viewer`) could attack
+#[allow(clippy::too_many_arguments)] // the rule's inputs, passed as the step holds them
 fn options_at(
     g: &mut Game,
     t: &Tables,
@@ -65,7 +66,7 @@ fn options_at(
                 continue;
             }
             if capturer {
-                let x = g.tiles[i].clone();
+                let x = g.tiles[i];
                 if x.improvement.as_ref().is_some_and(|m| m.kind == CITY)
                     && x.owner != 0
                     && x.owner != unit.owner
@@ -194,7 +195,7 @@ pub fn attack_command(
         .filter_map(|x| x.unit)
         .find(|&n| u64::from(g.units[n as usize].id) == id)
         .ok_or("attack with a missing unit")?;
-    let u = g.units[node as usize].clone();
+    let u = g.units[node as usize];
     let range = data(t, &u)?.range;
     crate::step::base(out, p, 2);
     // the unit or its passenger infiltrates; the Infiltrate action then reads the tile's unit
@@ -206,7 +207,7 @@ pub fn attack_command(
         out.push(Action::Combat(Combat::Infiltrate {
             player: p,
             origin: u.coordinates,
-            target: target,
+            target,
         }));
         g.units[node as usize].moved = true;
         g.units[node as usize].attacked = true;
@@ -214,7 +215,8 @@ pub fn attack_command(
         attack_diplomacy(g, p, owner, out)?;
         return Ok(());
     }
-    for a in ["consumed"] {
+    {
+        let a = "consumed";
         if has(t, &u, a)?
             || u.passenger
                 .is_some_and(|n| has(t, &g.units[n as usize], a).unwrap_or(false))
@@ -226,7 +228,7 @@ pub fn attack_command(
         .tile(target)
         .ok_or("attack target")?
         .unit
-        .map(|n| g.units[n as usize].clone());
+        .map(|n| g.units[n as usize]);
     let (mut dealt, mut back, mut advance, mut reveal) = (0, 0, false, false);
     let mut killed = true;
     if let Some(d) = &defender {
@@ -242,8 +244,8 @@ pub fn attack_command(
             if has(t, &u, "convert")? && !killed && d.owner != 255 {
                 out.push(Action::Combat(Combat::Convert {
                     player: p,
-                    origin: origin,
-                    target: target,
+                    origin,
+                    target,
                 }));
             }
             if killed && has(t, &u, "eat")? && d.owner != 255 {
@@ -323,7 +325,7 @@ pub fn attack_command(
                 let Some(n) = g.tile(c).and_then(|x| x.unit) else {
                     continue;
                 };
-                let d = g.units[n as usize].clone();
+                let d = g.units[n as usize];
                 let peace = d.owner == p || {
                     let r = relation_state(g, p, d.owner)?;
                     r == PEACE || r == COOL_DOWN
@@ -342,9 +344,9 @@ pub fn attack_command(
                 let damage = half_damage(battle_full(g, t, &u, &d)?.0);
                 out.push(Action::Combat(Combat::Attack {
                     player: p,
-                    origin: origin,
+                    origin,
                     target: c,
-                    damage: damage,
+                    damage,
                     animation: 2,
                     should_move_to_target: false,
                     delay: 20,
@@ -354,12 +356,12 @@ pub fn attack_command(
     }
     out.push(Action::Combat(Combat::Attack {
         player: p,
-        origin: origin,
-        target: target,
+        origin,
+        target,
         damage: dealt,
         animation: 1,
         should_move_to_target: advance,
-        delay: delay,
+        delay,
     }));
     if crate::menu::unit_effect_list(g, u.effects).contains(&INVISIBLE) {
         out.push(Action::MoveEffect(MoveEffect::Reveal {
@@ -426,7 +428,7 @@ pub fn perform_attack(
         set_direction(g, d, target, origin);
         remove_effect(g, d, BOOSTED)?;
         remove_effect(g, d, SWIFT)?;
-        let snapshot = g.units[d as usize].clone();
+        let snapshot = g.units[d as usize];
         out.extend(crate::aquarion::bubble_lost(g, &snapshot));
         let signed = snapshot.health as i16;
         let dealt = damage.min(i32::from(signed)) as i16;
@@ -438,7 +440,7 @@ pub fn perform_attack(
                 g.players[ai].kills += 1;
                 if origin != (Xy { x: -1, y: -1 }) {
                     if let Some(s) = source {
-                        let su = g.units[s as usize].clone();
+                        let su = g.units[s as usize];
                         if !has(t, &su, "carry")?
                             && !data(t, &su)?.hidden
                             && !has(t, &su, "static")?
@@ -505,7 +507,7 @@ pub fn kill(g: &mut Game, t: &Tables, c: Xy, out: &mut Vec<Action>) -> Result<()
     let i = g.index(c).ok_or("kill tile")?;
     let n = g.tiles[i].unit.ok_or("kill with no unit")?;
     g.units[n as usize].health = 0;
-    let u = g.units[n as usize].clone();
+    let u = g.units[n as usize];
     // the follower of a dead head takes its flags and grows into a centipede; the leader lets go
     if u.follower != 0 {
         if let Some(f) = crate::linked::find(g, u.follower) {
@@ -554,12 +556,12 @@ pub fn convert(
         .tile(target)
         .and_then(|c| c.unit)
         .ok_or("convert target unit")?;
-    let original = g.units[id as usize].clone();
+    let original = g.units[id as usize];
     if original.owner == actor {
         return Ok(());
     }
     let source = source.ok_or("convert source unit")?;
-    let converter = g.units[source as usize].clone();
+    let converter = g.units[source as usize];
     let p = player_index(g, converter.owner)?;
     if original.owner != 255 {
         if let Some(task) = g.players[p].task_mut(9) {
@@ -633,7 +635,7 @@ pub fn area_damage(
     center: Xy,
     out: &mut Vec<Action>,
 ) -> Result<(), String> {
-    let attacker = g.units[node as usize].clone();
+    let attacker = g.units[node as usize];
     for x in center.x - 1..=center.x + 1 {
         for y in center.y - 1..=center.y + 1 {
             let target = Xy { x, y };
@@ -643,7 +645,7 @@ pub fn area_damage(
             let Some(h) = g.tile(target).and_then(|c| c.unit) else {
                 continue;
             };
-            let d = g.units[h as usize].clone();
+            let d = g.units[h as usize];
             let peace = d.owner == attacker.owner || {
                 let r = relation_state(g, attacker.owner, d.owner)?;
                 r == PEACE || r == COOL_DOWN
@@ -665,8 +667,8 @@ pub fn area_damage(
             out.push(Action::Combat(Combat::Attack {
                 player: attacker.owner,
                 origin: center,
-                target: target,
-                damage: damage,
+                target,
+                damage,
                 animation: if tentacles { 3 } else { 2 },
                 should_move_to_target: false,
                 delay: 20,

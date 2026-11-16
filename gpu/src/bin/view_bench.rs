@@ -46,7 +46,7 @@ fn positions(t: &Tables, size: i32, want: usize) -> Result<Vec<Game>, String> {
                 .filter(|&i| ![15, 35].contains(&legal[i].action.kind))
                 .collect();
             let pick = match legal.iter().position(|c| c.action.kind == 15) {
-                Some(e) if others.is_empty() || r % 10 == 0 => e,
+                Some(e) if others.is_empty() || r.is_multiple_of(10) => e,
                 _ if !others.is_empty() => others[(r / 10) % others.len()],
                 _ => break,
             };

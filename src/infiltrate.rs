@@ -40,7 +40,7 @@ pub fn infiltrate(
         // the Moth's infiltration poisons the city instead of raising a rebellion
         reward: if kind == MOTH { POISON } else { REBELLION },
         coordinates: target,
-        kind: kind,
+        kind,
     }));
     Ok(())
 }
@@ -132,7 +132,7 @@ fn rebellion_weight(g: &mut Game, t: &Tables, p: i32, c: Xy) -> Result<f32, Stri
     let hash = crate::step::random_hash(g)?;
     let h = hash.hash(&[c.x, c.y, g.current_turn]);
     let mut weight = hash.range_float(0.0, f32::from_bits(0x3dcccccd), &[h as i32]);
-    let tile = g.tile(c).ok_or("rebellion tile")?.clone();
+    let tile = *g.tile(c).ok_or("rebellion tile")?;
     if tile.improvement.as_ref().is_some_and(|m| m.kind == CITY) {
         weight += 2.0;
     }
@@ -244,7 +244,7 @@ pub fn reward(
     let Some(ci) = g.index(city) else {
         return Ok(());
     };
-    let Some(improvement) = g.tiles[ci].improvement.clone() else {
+    let Some(improvement) = g.tiles[ci].improvement else {
         return Ok(());
     };
     let Ok(pi) = player_index(g, actor) else {
@@ -265,7 +265,7 @@ pub fn reward(
     if !effects.contains(&1) {
         effects.push(1);
     }
-    let defender = g.tiles[ci].unit.map(|n| g.units[n as usize].clone());
+    let defender = g.tiles[ci].unit.map(|n| g.units[n as usize]);
     let battle = match &defender {
         Some(d) => Some(crate::attack::battle_full(g, t, &temporary, d)?),
         None => None,

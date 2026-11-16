@@ -296,6 +296,7 @@ impl Batch {
     /// game's preset and mode ids; a game stops as truncated after `action_limit` decisions.
     /// A configuration the engine does not take refuses the slot (status 4), not the call.
     #[pyo3(signature = (slots, seeds, tribes, map=2, mode=4, action_limit=1000))]
+    #[allow(clippy::too_many_arguments)] // Python's keyword arguments
     fn reset(
         &mut self,
         py: Python<'_>,

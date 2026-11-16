@@ -217,8 +217,8 @@ fn lockstep(size: i32, slots: usize, calls: usize, outputs: Outputs) {
         let at = format!("size {size}, call {call}");
         compare(&cpu, &x, &at);
         let r = read(&x, slots);
-        for k in 0..slots {
-            assert_eq!(r.applied[k], applied[k] as i32, "{at}, slot {k}: applied");
+        for (k, a) in applied.iter().enumerate().take(slots) {
+            assert_eq!(r.applied[k], *a as i32, "{at}, slot {k}: applied");
         }
         let not_playing = (0..slots)
             .filter(|&k| cpu.status(k) != Status::Playing)
@@ -285,7 +285,7 @@ fn a_device_step_moves_no_per_game_data() {
         let before = gpu.traffic();
         let steps = 40;
         for s in 0..steps {
-            gpu.random_actions(s as u64, &actions).unwrap();
+            gpu.random_actions(s, &actions).unwrap();
             gpu.step_device(actions.ptr, actions.bytes).unwrap();
         }
         let after = gpu.traffic();

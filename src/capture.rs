@@ -53,7 +53,7 @@ pub fn capture_command(
         .find(|&n| u64::from(g.units[n as usize].id) == id);
     let mut invisible = false;
     if let Some(n) = node {
-        let u = g.units[n as usize].clone();
+        let u = g.units[n as usize];
         invisible = crate::menu::unit_effect_list(g, u.effects).contains(&INVISIBLE);
         crate::units::make_exhausted(g, n)?;
     }
@@ -263,7 +263,7 @@ pub fn capture_city(
     area.reverse();
     let (mut scores, mut new_tiles) = (Vec::new(), Vec::new());
     for &i in &area {
-        let tile = g.tiles[i].clone();
+        let tile = g.tiles[i];
         if tile.owner != actor {
             let mut amount = 20;
             if tile.improvement.is_some() && tile.coordinates != city {
@@ -271,7 +271,7 @@ pub fn capture_city(
             }
             scores.push(Action::Payload(Payload::IncreaseScore {
                 player: actor,
-                amount: amount,
+                amount,
                 source: tile.coordinates,
                 delay: 50,
             }));
@@ -280,7 +280,7 @@ pub fn capture_city(
             } else {
                 scores.push(Action::Combat(Combat::DecreaseScore {
                     player: tile.owner,
-                    amount: amount,
+                    amount,
                 }));
             }
         }

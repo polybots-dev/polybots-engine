@@ -88,7 +88,7 @@ pub fn city_reward(
                 player: p,
                 unit: g.current_unit_id,
                 remaining: 12,
-                seed: seed,
+                seed,
                 from: c,
                 path: Default::default(),
                 behaviour: 0,
@@ -132,7 +132,7 @@ pub fn city_reward(
                 out.push(Action::Payload(Payload::IncreaseCurrency {
                     player: p,
                     source: c,
-                    delay: delay,
+                    delay,
                     amount: 1,
                 }));
             }
@@ -205,7 +205,7 @@ pub fn expand_city(
         }
         out.push(Action::Payload(Payload::IncreaseScore {
             player: actor,
-            amount: amount,
+            amount,
             source: g.tiles[i].coordinates,
             delay: 100,
         }));
@@ -335,7 +335,7 @@ fn can_cross(
     allowed: u32,
 ) -> Result<bool, String> {
     let (origin, target) = (scout_coordinate(center, from), scout_coordinate(center, to));
-    let tile = g.tile(target).ok_or("scout tile")?.clone();
+    let tile = *g.tile(target).ok_or("scout tile")?;
     let pi = player_index(g, p)?;
     if tile.owner != 0 && tile.owner != p {
         relation_entry(g, pi, tile.owner)?;

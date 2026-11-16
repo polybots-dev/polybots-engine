@@ -119,7 +119,7 @@ pub(crate) fn admit_freeze_area(g: &mut Game, t: &Tables, c: Xy) -> Result<(), S
         .tile(c)
         .and_then(|x| x.unit)
         .ok_or("freeze area with no unit")?;
-    let u = g.units[n as usize].clone();
+    let u = g.units[n as usize];
     if u.moved || u.attacked || !unit_has(t, u.kind, "freezearea") || g.player(u.owner).is_none() {
         return Err("freeze area refused".into());
     }
@@ -204,7 +204,7 @@ pub(crate) fn freeze_area(
         }
         if freeze_units {
             if let Some(n) = g.tiles[i].unit {
-                let u = g.units[n as usize].clone();
+                let u = g.units[n as usize];
                 if !active_peace(g, actor, &u)?
                     && !crate::menu::unit_effect_list(g, u.effects).contains(&FROZEN)
                 {
@@ -422,7 +422,7 @@ pub(crate) fn break_ice(
 ) -> Result<(), String> {
     let i = g.index(c).ok_or("break ice tile")?;
     if let Some(n) = g.tiles[i].unit {
-        let u = g.units[n as usize].clone();
+        let u = g.units[n as usize];
         if crate::menu::unit_effect_list(g, u.effects).contains(&INVISIBLE) {
             player_index(g, p)?;
             if u.owner != p && relation_state(g, p, u.owner)? != PEACE {

@@ -176,6 +176,7 @@ fn accessible(
 }
 
 /// Whether there is a router path; it is left in `a.path`, destination first
+#[allow(clippy::too_many_arguments)] // the rule's inputs, passed as the step holds them
 fn router_path(
     g: &mut Game,
     t: &Tables,
@@ -759,16 +760,16 @@ pub fn city_connection(
     }
     let pop = |player: i32, source: Xy, target: Xy| {
         Action::City(City::IncreasePopulation {
-            player: player,
-            source: source,
-            target: target,
+            player,
+            source,
+            target,
             delay: 60,
         })
     };
     let depop = |player: i32, target: Xy| {
         Action::City(City::DecreasePopulation {
-            player: player,
-            target: target,
+            player,
+            target,
             delay: 60,
         })
     };

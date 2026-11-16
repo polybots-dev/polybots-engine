@@ -41,7 +41,7 @@ fn the_ports_city_names_are_the_engines() {
                 };
                 let mut block = device::to_device(&g).unwrap();
                 let seeds = block.naming_next;
-                let got = twin_city_name(&mut block, &flat, p.tribe, i32::from(p.skin), c.x, c.y);
+                let got = twin_city_name(&mut block, &flat, p.tribe, p.skin, c.x, c.y);
                 if block.naming_next != seeds {
                     skipped += 1;
                     continue;
@@ -93,7 +93,7 @@ fn a_captured_villages_name_is_the_engines_for_each_skin() {
                 continue;
             };
             let capital = g.tile(g.players[mover].start_tile).unwrap().unit.unwrap() as usize;
-            let mut u = g.units[capital].clone();
+            let mut u = g.units[capital];
             u.id = 7_000 + seed as u32;
             u.coordinates = g.tiles[v].coordinates;
             g.units.push(u);

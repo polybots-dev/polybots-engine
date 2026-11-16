@@ -212,7 +212,7 @@ pub(crate) fn visible_unit_owner(g: &mut Game, p: i32, i: usize) -> Result<Optio
 pub(crate) fn meet(p: i32, other: i32, c: Xy) -> Action {
     Action::Meet {
         player: p,
-        other: other,
+        other,
         coordinates: c,
         technology: 0,
     }
@@ -339,7 +339,7 @@ pub fn meet_action(
         player: p,
         delay: 40,
         source: coordinates,
-        amount: amount,
+        amount,
     }));
     Ok(())
 }

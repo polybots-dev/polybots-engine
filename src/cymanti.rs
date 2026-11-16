@@ -224,7 +224,7 @@ pub(crate) fn improvement_upkeep(
 /// A poisoned unit is healed of the poison (and Charmed) instead of hit points; the passenger's
 /// list is cleared too, which is the same list when they share it
 pub(crate) fn cure(g: &mut Game, n: u32) -> Result<(), String> {
-    let u = g.units[n as usize].clone();
+    let u = g.units[n as usize];
     let lists = [
         Some(u.effects),
         u.passenger.map(|p| g.units[p as usize].effects),
@@ -301,7 +301,7 @@ pub(crate) fn poison_tile(g: &Game, t: &Tables, n: u32, c: Xy) -> Option<Action>
         .player(u.owner)
         .and_then(|p| t.tribes.get(p.tribe as usize))
         .is_some_and(|d| d.tribe_abilities.has("poisonresist"));
-    (g.player(u.owner).is_some() && !resists && !unit_has(t, u.kind, "fly")).then(|| {
+    (g.player(u.owner).is_some() && !resists && !unit_has(t, u.kind, "fly")).then_some({
         Action::Combat(Combat::Poison {
             player: tile.owner,
             origin: c,
@@ -332,7 +332,7 @@ pub(crate) fn explode(
     } else {
         carrier
     };
-    let u: Unit = g.units[selected as usize].clone();
+    let u: Unit = g.units[selected as usize];
     if u.follower != 0 {
         if let Some(f) = crate::linked::find(g, u.follower) {
             out.push(Action::Combat(Combat::Explode {
@@ -353,7 +353,7 @@ pub(crate) fn explode(
     for k in area {
         let target = g.tiles[k].coordinates;
         let Some(n) = g.tiles[k].unit else { continue };
-        let d = g.units[n as usize].clone();
+        let d = g.units[n as usize];
         let peace = d.owner == actor || {
             let r = relation_state(g, actor, d.owner)?;
             r == PEACE || r == COOL_DOWN

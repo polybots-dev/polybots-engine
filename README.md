@@ -5,9 +5,16 @@ plays many games per call: it hands out what the player to move may know (the *v
 that player's *legal moves*, and takes one move per game. It is a simulator for training,
 not a way to play the game.
 
-Not affiliated with or endorsed by Midjiwan, the game's maker. The tree contains none of
-the game's code or data: the engine reads the game's rule data from your own installed copy
-of the game (below).
+The tree contains none of the game's code or data: the engine reads the game's rule data
+from your own installed copy of the game (below).
+
+## Disclaimer
+
+This is an unofficial community project. It is not affiliated with, endorsed by or
+supported by Midjiwan AB. *The Battle of Polytopia* and related names are trademarks of
+Midjiwan AB, used here only to describe what the project simulates. We respect Midjiwan's
+wishes. If Midjiwan asks us to change, restrict or remove any part of this project, we will
+do so promptly. Contact the maintainers by opening an issue.
 
 ## Layout
 
@@ -37,7 +44,7 @@ rule data of any other version. The Python package reads the file `ENGINE_FAST_R
 
 ## Build and test
 
-Rust 1.82 or later. With `ENGINE_FAST_RULES` set:
+Rust 1.92 or later. With `ENGINE_FAST_RULES` set:
 
     cargo test --release                                   # the engine
     cargo test --release --manifest-path batch/Cargo.toml  # the batch against single games

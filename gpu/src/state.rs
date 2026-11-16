@@ -753,14 +753,11 @@ fn fit<T: TryFrom<i64>>(v: impl Into<i64>, what: &str) -> Result<T, String> {
 }
 
 /// A list into a narrowed device array: its entries through `fit`, its length as an int8.
-fn fit_list<T: Copy, U: TryFrom<i64>, const N: usize>(
+fn fit_list<T: Copy + Into<i64>, U: TryFrom<i64>, const N: usize>(
     from: &[T],
     to: &mut [U; N],
     what: &str,
-) -> Result<i8, String>
-where
-    T: Into<i64>,
-{
+) -> Result<i8, String> {
     if from.len() > N {
         return Err(format!("{what}: {} entries, room for {N}", from.len()));
     }
@@ -1316,6 +1313,7 @@ pub fn twin_probe(d: &Block) -> [i64; 4] {
 /// Upload the blocks to the GPU, compute each one's digest and probe there, and download the
 /// blocks again: (the blocks as they came back, digests, probes).
 #[cfg(feature = "cuda")]
+#[allow(clippy::type_complexity)] // the three results the doc comment names
 pub fn device_roundtrip(games: &[Block]) -> Result<(Vec<Block>, Vec<u64>, Vec<[i64; 4]>), String> {
     let (flat, (tile_cap, unit_cap)) = pack(games);
     let mut back = vec![0u64; flat.len()];

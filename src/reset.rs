@@ -382,7 +382,7 @@ pub fn reset(config: &Config, catalog_json: &str, t: &Tables) -> Result<Game, St
     // no west-placement request: the environment's settings never name a preferred player
     select::select(&mut g, t, &settings, None, || map_random.next())?;
     starting_roster(&mut g, t)?;
-    crate::step::submit(&mut g, &t, 1, crate::action::Command::StartMatch)?;
+    crate::step::submit(&mut g, t, 1, crate::action::Command::StartMatch)?;
     if player_index(&g, NATURE)? == g.current_player_index as usize {
         return Err("a game starting on Nature's turn not implemented".into());
     }

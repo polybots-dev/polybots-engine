@@ -2,6 +2,7 @@
 name = "engine-fast-gpu"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.92"
 description = "GPU backend for engine-fast: the rules in a C subset built for the host and for CUDA, checked bit for bit against the Rust engine."
 license = "Apache-2.0"
 publish = false

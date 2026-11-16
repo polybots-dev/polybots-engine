@@ -154,6 +154,7 @@ pub(crate) fn create_unit(
 }
 
 /// Train: pay, create, explore around, surrounding-area levels, score
+#[allow(clippy::too_many_arguments)] // the rule's inputs, passed as the step holds them
 pub fn train(
     g: &mut Game,
     t: &Tables,
@@ -195,8 +196,8 @@ pub fn train(
     crate::explore::explore_from(g, player, c, sight, out)?;
     crate::economy::surrounding(g, t, player, c, out)?;
     out.push(Action::Payload(Payload::IncreaseScore {
-        player: player,
-        amount: amount,
+        player,
+        amount,
         source: c,
         delay: 0,
     }));
@@ -225,7 +226,7 @@ pub fn embark(
     };
     let new = create_unit(g, t, player, vehicle, c, out)?;
     let protect = has(t, vehicle, "protect")?;
-    let p = g.units[old as usize].clone();
+    let p = g.units[old as usize];
     let v = &mut g.units[new as usize];
     if !protect {
         v.health = p.health;
@@ -255,7 +256,7 @@ pub fn disembark(
     let Some(vehicle) = g.tiles[i].unit else {
         return Ok(());
     };
-    let v = g.units[vehicle as usize].clone();
+    let v = g.units[vehicle as usize];
     let Some(passenger) = v.passenger else {
         return Ok(());
     };
@@ -297,7 +298,7 @@ pub fn disembark(
     let difference =
         unit_score(g, t, &v).wrapping_sub(unit_score(g, t, &g.units[passenger as usize]));
     out.push(Action::Combat(Combat::DecreaseScore {
-        player: player,
+        player,
         amount: difference,
     }));
     Ok(())
@@ -366,7 +367,7 @@ pub fn upgrade(
     let cur = &mut g.players[p].action.currency;
     *cur = cur.wrapping_sub(cost).max(0);
     let new = create_unit(g, t, player, kind, c, out)?;
-    let old = g.units[original as usize].clone();
+    let old = g.units[original as usize];
     let n = &mut g.units[new as usize];
     if old.passenger.is_some() {
         n.passenger = old.passenger;
@@ -389,7 +390,7 @@ pub fn upgrade(
     g.units[new as usize].health = health;
     let score = unit_score(g, t, &g.units[new as usize]).wrapping_sub(unit_score(g, t, &old));
     out.push(Action::Payload(Payload::IncreaseScore {
-        player: player,
+        player,
         amount: score,
         delay: 0,
         source: c,
@@ -467,7 +468,7 @@ const VECTORS: [(i32, i32); 8] = [
 fn try_push(g: &mut Game, t: &Tables, actor: i32, c: Xy) -> Result<Option<Action>, String> {
     let i = g.index(c).ok_or("push tile")?;
     let n = g.tiles[i].unit.ok_or("push with no unit")?;
-    let unit = g.units[n as usize].clone();
+    let unit = g.units[n as usize];
     let mut direction = if unit.owner == actor {
         unit.direction
     } else if unit.direction < 4 {
@@ -542,8 +543,8 @@ pub(crate) fn train_on_occupied(
     // the game resolves the kind through the player's tribe again
     let kind = t.tribe_unit(g.players[pi].tribe, kind)?;
     out.push(Action::Economy(Economy::Train {
-        player: player,
-        kind: kind,
+        player,
+        kind,
         target: c,
         cost: 0,
         direction_target: NULL,
@@ -556,26 +557,23 @@ pub(crate) fn train_on_occupied(
         Some(push) => out.push(push),
         None => {
             out.push(Action::Combat(Combat::Kill {
-                player: player,
+                player,
                 coordinates: c,
             }));
             // rules 124 adds a Houdini action after the Kill; rules 123 has none
             if g.fixed.version == 124 {
-                out.push(Action::Economy(Economy::Houdini {
-                    player: player,
-                    target: c,
-                }));
+                out.push(Action::Economy(Economy::Houdini { player, target: c }));
             }
         }
     }
-    let u = g.units[occupant as usize].clone();
+    let u = g.units[occupant as usize];
     if crate::menu::unit_effect_list(g, u.effects).contains(&3) && u.owner != player {
         let peace = u.owner != 0 && {
             crate::step::relation_entry(g, pi, u.owner)?.state == crate::state::PEACE
         };
         if !peace {
             out.push(Action::MoveEffect(MoveEffect::Reveal {
-                player: player,
+                player,
                 coordinates: c,
                 origin: NULL,
                 show_popup: false,

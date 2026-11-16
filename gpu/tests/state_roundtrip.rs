@@ -50,7 +50,7 @@ fn play(size: i32, seats: usize, seed: i32, decisions: usize, mut each: impl FnM
             .collect();
         let end = legal.iter().position(|c| c.action.kind == END_TURN);
         let pick = match end {
-            Some(e) if others.is_empty() || r % 10 == 0 => e,
+            Some(e) if others.is_empty() || r.is_multiple_of(10) => e,
             _ if !others.is_empty() => others[(r / 10) % others.len()],
             _ => return,
         };

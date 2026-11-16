@@ -94,7 +94,7 @@ fn play(t: &Tables, seeds: std::ops::Range<i32>, copies: bool) -> BTreeMap<i32, 
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
             let slot = match kinds.iter().position(|&k| k == END_TURN) {
-                Some(e) if pick.is_empty() || (rng >> 33) % 10 == 0 => e,
+                Some(e) if pick.is_empty() || (rng >> 33).is_multiple_of(10) => e,
                 _ => pick[((rng >> 33) as usize) % pick.len()],
             };
             let action = &candidates[slot].action;

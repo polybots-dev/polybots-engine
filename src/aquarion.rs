@@ -261,7 +261,7 @@ pub(crate) fn strike(
     target: Xy,
     out: &mut Vec<Action>,
 ) -> Result<(), String> {
-    let defender = g.units[node as usize].clone();
+    let defender = g.units[node as usize];
     let mut strongest: Option<(Xy, Unit)> = None;
     for x in target.x - 1..=target.x + 1 {
         for y in target.y - 1..=target.y + 1 {
@@ -272,7 +272,7 @@ pub(crate) fn strike(
             let Some(n) = g.tile(origin).and_then(|x| x.unit) else {
                 continue;
             };
-            let u = g.units[n as usize].clone();
+            let u = g.units[n as usize];
             if u.owner == 255 || u.owner == actor {
                 continue;
             }

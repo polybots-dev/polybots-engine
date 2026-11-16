@@ -20,6 +20,7 @@ use std::time::Instant;
 const RESIGN: i32 = 35;
 const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
 
+#[allow(clippy::large_enum_variant)] // one value for the whole run
 enum Backend {
     Cpu(Batch),
     Gpu(Box<GpuBatch>),

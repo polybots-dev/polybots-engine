@@ -147,7 +147,7 @@ pub fn examine_command(
     let reward = select_reward(g, t, p, c)?;
     out.push(Action::Ruins {
         player: p,
-        reward: reward,
+        reward,
         coordinates: c,
     });
     if let Some(n) = unit {
@@ -199,7 +199,7 @@ pub fn ruins(
                         player: p,
                         source: c,
                         target: capital,
-                        delay: delay,
+                        delay,
                     }));
                 }
             }
@@ -211,7 +211,7 @@ pub fn ruins(
                 player: p,
                 unit: g.current_unit_id,
                 remaining: 12,
-                seed: seed,
+                seed,
                 from: c,
                 path: Default::default(),
                 behaviour: 0,
@@ -228,7 +228,7 @@ pub fn ruins(
                 cost: 0,
             });
         }
-        r @ (5 | 6 | 7 | 8) => {
+        r @ (5..=8) => {
             let kind = match r {
                 5 => 12,
                 6 => 44,

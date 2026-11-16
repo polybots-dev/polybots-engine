@@ -4,7 +4,7 @@
 
 #include "query.h"
 
-#define EF_VIEW_PLANES 30
+#define EF_VIEW_PLANES 29
 #define EF_CITY_WALL_REWARD 1
 #define EF_PARK_REWARD 2
 #define EF_SUPER_UNIT_REWARD 6
@@ -23,8 +23,13 @@ enum {
     EF_P_CAPITAL_OF, EF_P_RULING_CITY, EF_P_ROAD, EF_P_ROUTE, EF_P_EFFECTS, EF_P_RUIN_HINT, EF_P_UNIT_KIND,
     EF_P_UNIT_OWNER, EF_P_UNIT_HEALTH, EF_P_UNIT_VETERAN, EF_P_UNIT_EFFECTS, EF_P_UNIT_PASSENGER, EF_P_UNIT_MOVED,
     EF_P_UNIT_ATTACKED, EF_P_UNIT_KILLS, EF_P_UNIT_HOME, EF_P_CITY_POPULATION, EF_P_CITY_CONNECTED,
-    EF_P_CITY_PROGRESS, EF_P_CITY_WALL, EF_P_CITY_PARKS, EF_P_CITY_SUPER_UNITS, EF_P_FOUNDER_TRIBE
+    EF_P_CITY_PROGRESS, EF_P_CITY_WALL, EF_P_CITY_PARKS, EF_P_CITY_SUPER_UNITS, EF_P_COUNT
 };
+#ifdef __cplusplus
+static_assert(EF_P_COUNT == EF_VIEW_PLANES, "the plane list and the plane count agree");
+#else
+_Static_assert(EF_P_COUNT == EF_VIEW_PLANES, "the plane list and the plane count agree");
+#endif
 
 typedef struct {
     int16_t seat, tribe, relation, pad;
@@ -140,8 +145,6 @@ EF_BIG EfResult ef_view_write(const EfGame *g, const EfTables *t, int32_t viewer
             const EfImprovement *m = &x->improvement;
             EF_PLANE(EF_P_IMPROVEMENT) = ef_i16(m->kind_n);
             EF_PLANE(EF_P_IMPROVEMENT_LEVEL) = m->kind_n == EF_CITY ? ef_i16(m->level_n) : 0;
-            int fi = ef_player_index(g, m->founder_n);
-            EF_PLANE(EF_P_FOUNDER_TRIBE) = fi == EF_NONE ? 0 : ef_i16(g->players[fi].tribe);
             if (m->kind_n == EF_CITY) {
                 EF_PLANE(EF_P_CITY_PARKS) = (int16_t)m->rewards_n[EF_PARK_REWARD];
                 EF_PLANE(EF_P_CITY_SUPER_UNITS) = (int16_t)m->rewards_n[EF_SUPER_UNIT_REWARD];

@@ -75,7 +75,7 @@ pub(crate) fn eat(
     let Some(n) = find(g, eater) else {
         return Ok(());
     };
-    let u = g.units[n as usize].clone();
+    let u = g.units[n as usize];
     let opposite = if u.direction < 4 {
         u.direction + 4
     } else {

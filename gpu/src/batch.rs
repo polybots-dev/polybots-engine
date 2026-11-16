@@ -199,6 +199,7 @@ impl GpuBatch {
         let (t, catalog) = (&self.tables, self.catalog.as_str());
         // the games on the CPU, `workers` at a time; an error refuses a slot, a panic fails it
         let chunk = named.len().div_ceil(self.workers).max(1);
+        #[allow(clippy::type_complexity)] // each slot with its game or why it was refused
         let started: Vec<(usize, Result<Game, (Status, String)>)> = std::thread::scope(|s| {
             let handles: Vec<_> = named
                 .chunks(chunk)

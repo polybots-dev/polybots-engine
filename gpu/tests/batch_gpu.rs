@@ -70,8 +70,8 @@ fn the_gpu_batch_equals_the_cpu_batch() {
                 match n {
                     0 => -1,
                     // a skip now and then, and an index past the list
-                    _ if r % 29 == 0 => -1,
-                    _ if r % 31 == 0 => n as i32,
+                    _ if r.is_multiple_of(29) => -1,
+                    _ if r.is_multiple_of(31) => n as i32,
                     _ => (r % n) as i32,
                 }
             })

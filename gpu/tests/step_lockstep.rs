@@ -83,7 +83,7 @@ fn choose(legal: &[menu::Cand], rng: &mut u64) -> Option<Action> {
         .filter(|&i| ![END_TURN, RESIGN].contains(&legal[i].action.kind))
         .collect();
     let pick = match legal.iter().position(|c| c.action.kind == END_TURN) {
-        Some(e) if others.is_empty() || r % 10 == 0 => e,
+        Some(e) if others.is_empty() || r.is_multiple_of(10) => e,
         _ if !others.is_empty() => others[(r / 10) % others.len()],
         _ => return None,
     };
@@ -144,11 +144,11 @@ fn compare(
                     tally.unnamed_captures += 1;
                 }
             }
-            for k in 0..32 {
-                tally.commands[k] += ran_commands[k];
+            for (t, r) in tally.commands.iter_mut().zip(ran_commands) {
+                *t += r;
             }
-            for k in 0..80 {
-                tally.actions[k] += ran_actions[k];
+            for (t, r) in tally.actions.iter_mut().zip(ran_actions).take(80) {
+                *t += r;
             }
         }
         (Err(e), Err(stop)) => {

@@ -80,36 +80,6 @@ pub fn first_difference(a: &Value, b: &Value, path: &mut String) -> Option<Strin
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn digest_ignores_key_order_only() {
-        assert_eq!(
-            digest(&json!({"a": 1, "b": [1, 2]})),
-            digest(&json!({"b": [1, 2], "a": 1}))
-        );
-        assert_ne!(
-            digest(&json!({"a": 1, "b": [1, 2]})),
-            digest(&json!({"a": 1, "b": [2, 1]}))
-        );
-        assert_ne!(digest(&json!({"a": 1})), digest(&json!({"a": 1.0})));
-    }
-
-    #[test]
-    fn first_difference_names_the_path() {
-        let a = json!({"x": {"units": [{"hp": 10}, {"hp": 5}]}});
-        let b = json!({"x": {"units": [{"hp": 10}, {"hp": 4}]}});
-        assert_eq!(
-            first_difference(&a, &b, &mut String::new()).as_deref(),
-            Some(".x.units[1].hp")
-        );
-        assert_eq!(first_difference(&a, &a, &mut String::new()), None);
-    }
-}
-
 /// The behaviour contract's comparison: the part of a
 /// checkpoint that can change a later legal move, a later outcome or what a player sees.
 /// Two engines agree on a state when their projections are equal. What is left out, and
@@ -379,4 +349,34 @@ pub fn difference(reference: &Value, ours: &Value) -> Result<Option<String>, Str
     let (a, b) = (projection(reference)?, projection(ours)?);
     Ok((digest(&a) != digest(&b))
         .then(|| first_difference(&a, &b, &mut String::new()).unwrap_or_default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn digest_ignores_key_order_only() {
+        assert_eq!(
+            digest(&json!({"a": 1, "b": [1, 2]})),
+            digest(&json!({"b": [1, 2], "a": 1}))
+        );
+        assert_ne!(
+            digest(&json!({"a": 1, "b": [1, 2]})),
+            digest(&json!({"a": 1, "b": [2, 1]}))
+        );
+        assert_ne!(digest(&json!({"a": 1})), digest(&json!({"a": 1.0})));
+    }
+
+    #[test]
+    fn first_difference_names_the_path() {
+        let a = json!({"x": {"units": [{"hp": 10}, {"hp": 5}]}});
+        let b = json!({"x": {"units": [{"hp": 10}, {"hp": 4}]}});
+        assert_eq!(
+            first_difference(&a, &b, &mut String::new()).as_deref(),
+            Some(".x.units[1].hp")
+        );
+        assert_eq!(first_difference(&a, &a, &mut String::new()), None);
+    }
 }

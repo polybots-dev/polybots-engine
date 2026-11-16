@@ -10,7 +10,7 @@ use crate::tables::Tables;
 pub const UNKNOWN: i16 = -1;
 
 /// The per-tile planes, in order. Each has one entry per tile, at index `y * width + x`.
-pub const TILE_PLANES: [&str; 30] = [
+pub const TILE_PLANES: [&str; 29] = [
     "explored",
     "terrain",
     "climate",
@@ -40,7 +40,6 @@ pub const TILE_PLANES: [&str; 30] = [
     "city_wall",
     "city_parks",
     "city_super_units",
-    "founder_tribe",
 ];
 
 /// The index of a tile plane by name (a preparation resolves this once).
@@ -159,7 +158,7 @@ pub fn write(g: &Game, t: &Tables, viewer: i32, out: &mut View) -> Result<(), St
         .is_some_and(|d| d.tribe_abilities.has("rainbowvision"));
     let tile_index = |c: crate::state::Xy| g.index(c).map_or(UNKNOWN, |i| i as i16);
     let mut planes: Vec<&mut [i16]> = out.tiles.chunks_mut(n).collect();
-    let [explored, terrain, climate, resource, improvement, level, owner, capital, ruling, road, route, effects, ruin_hint, unit_kind, unit_owner, unit_health, unit_veteran, unit_effects, unit_passenger, unit_moved, unit_attacked, unit_kills, unit_home, city_population, city_connected, city_progress, city_wall, city_parks, city_super_units, founder_tribe] =
+    let [explored, terrain, climate, resource, improvement, level, owner, capital, ruling, road, route, effects, ruin_hint, unit_kind, unit_owner, unit_health, unit_veteran, unit_effects, unit_passenger, unit_moved, unit_attacked, unit_kills, unit_home, city_population, city_connected, city_progress, city_wall, city_parks, city_super_units] =
         planes.as_mut_slice()
     else {
         return Err("view planes".into());
@@ -191,7 +190,6 @@ pub fn write(g: &Game, t: &Tables, viewer: i32, out: &mut View) -> Result<(), St
             Some(m) if t.improvements.get(m.kind as usize).is_some() => {
                 improvement[i] = m.kind as i16;
                 level[i] = if m.kind == CITY { m.level as i16 } else { 0 };
-                founder_tribe[i] = g.player(m.founder).map_or(0, |p| p.tribe as i16);
                 if m.kind == CITY {
                     city_parks[i] = m.rewards.count(PARK) as i16;
                     city_super_units[i] = m.rewards.count(SUPER_UNIT) as i16;

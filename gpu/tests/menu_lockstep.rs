@@ -121,7 +121,7 @@ fn play(
             .collect();
         let end = moves.iter().position(|m| m[0] == END_TURN);
         let pick = match end {
-            Some(e) if others.is_empty() || r % 10 == 0 => e,
+            Some(e) if others.is_empty() || r.is_multiple_of(10) => e,
             _ if !others.is_empty() => others[(r / 10) % others.len()],
             _ => return,
         };
@@ -289,7 +289,7 @@ fn a_rich_players_list_equals_the_engines() {
                 .collect();
             let end = legal.iter().position(|c| c.action.kind == END_TURN);
             let mut order: Vec<usize> = match end {
-                Some(e) if others.is_empty() || r % 8 == 0 => vec![e],
+                Some(e) if others.is_empty() || r.is_multiple_of(8) => vec![e],
                 _ => (0..others.len())
                     .map(|k| others[(r / 8 + k) % others.len()])
                     .collect(),
@@ -518,7 +518,7 @@ fn the_host_slot_equals_the_batchs() {
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
             let r = (rng >> 33) as usize;
-            let pick = if r % 10 == 0 {
+            let pick = if r.is_multiple_of(10) {
                 moves.iter().position(|m| m[0] == END_TURN).unwrap_or(0)
             } else {
                 (r / 10) % moves.len()
@@ -589,10 +589,9 @@ fn a_cloak_infiltrates_as_in_the_engine() {
                 }) else {
                     continue;
                 };
-                let template = g.units
-                    [g.tile(g.players[mover].start_tile).unwrap().unit.unwrap() as usize]
-                    .clone();
-                let mut u = template.clone();
+                let template =
+                    g.units[g.tile(g.players[mover].start_tile).unwrap().unit.unwrap() as usize];
+                let mut u = template;
                 u.id = 9_000 + seed as u32;
                 u.kind = cloak;
                 u.coordinates = spot;
@@ -720,7 +719,7 @@ fn the_host_previews_and_defence_equal_the_batchs() {
             let moves = batch.moves(0);
             let attacks: Vec<usize> = (0..moves.len()).filter(|&i| moves[i][0] == 2).collect();
             let others: Vec<usize> = (0..moves.len()).filter(|&i| moves[i][0] != 35).collect();
-            let pick = if !attacks.is_empty() && r % 2 == 0 {
+            let pick = if !attacks.is_empty() && r.is_multiple_of(2) {
                 attacks[r / 2 % attacks.len()]
             } else {
                 others[r / 2 % others.len()]

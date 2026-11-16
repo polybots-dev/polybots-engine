@@ -66,7 +66,7 @@ fn play(
             .filter(|&i| ![END_TURN, RESIGN].contains(&legal[i].action.kind))
             .collect();
         let pick = match legal.iter().position(|c| c.action.kind == END_TURN) {
-            Some(e) if others.is_empty() || r % 10 == 0 => e,
+            Some(e) if others.is_empty() || r.is_multiple_of(10) => e,
             _ if !others.is_empty() => others[(r / 10) % others.len()],
             _ => return,
         };

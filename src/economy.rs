@@ -177,7 +177,7 @@ pub(crate) fn update_level(
         if level < m.level {
             for _ in 0..m.level - level {
                 out.push(Action::Economy(Economy::ImprovementLevelDown {
-                    player: player,
+                    player,
                     target: c,
                     amount: 1,
                 }));
@@ -185,7 +185,7 @@ pub(crate) fn update_level(
         } else {
             for _ in 0..level - m.level {
                 out.push(Action::Economy(Economy::ImprovementLevelUp {
-                    player: player,
+                    player,
                     target: c,
                 }));
             }
@@ -196,8 +196,8 @@ pub(crate) fn update_level(
 
 fn score_child(player: i32, amount: i32, c: Xy) -> Action {
     Action::Payload(Payload::IncreaseScore {
-        player: player,
-        amount: amount,
+        player,
+        amount,
         source: c,
         delay: 0,
     })
@@ -285,19 +285,16 @@ pub fn build(
     }
     if consumed && kind != 52 && g.tiles[i].resource.is_some() {
         out.push(Action::Economy(Economy::DestroyResource {
-            player: player,
+            player,
             target: c,
         }));
     }
     if kind == ROAD {
-        out.push(Action::Economy(Economy::BuildRoad {
-            player: player,
-            target: c,
-        }));
+        out.push(Action::Economy(Economy::BuildRoad { player, target: c }));
     }
     if kind == ROAD || !d.routes.is_empty() || has(d, "bridge") || has(d, "fill") || changes_route {
         if kind != ROAD {
-            out.push(Action::UpdateRoutes { player: player });
+            out.push(Action::UpdateRoutes { player });
         }
         out.push(Action::UpdateCityConnections {
             actor: player,
@@ -306,7 +303,7 @@ pub fn build(
     }
     for _ in 0..currency {
         out.push(Action::Payload(Payload::IncreaseCurrency {
-            player: player,
+            player,
             source: c,
             delay: 40,
             amount: 1,
@@ -320,7 +317,7 @@ pub fn build(
     if g.index(ruling).is_some() {
         for _ in 0..population {
             out.push(Action::City(City::IncreasePopulation {
-                player: player,
+                player,
                 source: c,
                 target: ruling,
                 delay: 60,
@@ -345,7 +342,7 @@ pub fn build(
             // created unless the player already sees a resource there
             if crate::infiltrate::visible_resource(g, t, player, c)?.is_none() {
                 out.push(Action::Economy(Economy::CreateResource {
-                    player: player,
+                    player,
                     kind: t.resources.id(n)? as i32,
                     target: c,
                     reason: 0,
@@ -379,7 +376,7 @@ pub fn build(
             // the builder is spent; an Invisible one is revealed
             if crate::menu::unit_effect_list(g, g.units[n as usize].effects).contains(&3) {
                 out.push(Action::MoveEffect(MoveEffect::Reveal {
-                    player: player,
+                    player,
                     coordinates: c,
                     origin: Xy { x: -1, y: -1 },
                     show_popup: false,
@@ -396,9 +393,7 @@ pub fn build(
         crate::polaris::ice_bank_levels(g, t, out)?;
     }
     if has(d, "unique") {
-        g.players[p]
-            .built_unique_improvements
-            .try_push(kind as i32)?;
+        g.players[p].built_unique_improvements.try_push(kind)?;
     }
     crate::step::buffered_last(out, start, buffered);
     Ok(())
@@ -425,12 +420,11 @@ pub fn destroy(
     let i = g.index(c).ok_or("destroy tile")?;
     let score = improvement_score(t, g, i);
     out.push(Action::Combat(Combat::DecreaseScore {
-        player: player,
+        player,
         amount: score,
     }));
     let m = g.tiles[i]
         .improvement
-        .clone()
         .ok_or("destroy without an improvement")?;
     // the children pushed from here are buffered: moved behind the surrounding-area ones at the end
     let start = out.len();
@@ -438,7 +432,7 @@ pub fn destroy(
         let ruling = g.tiles[i].ruling_city;
         for _ in 0..population_at_level(d, m.level).max(0) {
             out.push(Action::City(City::DecreasePopulation {
-                player: player,
+                player,
                 target: ruling,
                 delay: 200,
             }));
@@ -449,7 +443,7 @@ pub fn destroy(
             }
         }
         if !d.routes.is_empty() || has(d, "bridge") {
-            out.push(Action::UpdateRoutes { player: player });
+            out.push(Action::UpdateRoutes { player });
             out.push(Action::UpdateCityConnections {
                 actor: player,
                 players: Seats::from_iter([player]),
@@ -552,13 +546,13 @@ pub fn economy_action(
                         for _ in 0..population {
                             out.push(if down {
                                 Action::City(City::DecreasePopulation {
-                                    player: player,
+                                    player,
                                     target: ruling,
                                     delay: 200,
                                 })
                             } else {
                                 Action::City(City::IncreasePopulation {
-                                    player: player,
+                                    player,
                                     source: c,
                                     target: ruling,
                                     delay: 60,
@@ -612,10 +606,7 @@ pub fn city_action(
                 let m = g.tiles[i].improvement.as_ref().unwrap();
                 let current = g.players[g.current_player_index as usize].action.id;
                 if m.level < m.xp && owner == current {
-                    out.push(Action::City(City::LevelUp {
-                        player: player,
-                        target: c,
-                    }));
+                    out.push(Action::City(City::LevelUp { player, target: c }));
                 }
             } else {
                 let p = player_index(g, owner)?;

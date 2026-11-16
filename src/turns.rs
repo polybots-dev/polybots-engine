@@ -53,7 +53,7 @@ pub fn end_command(g: &mut Game, t: &Tables, p: i32, out: &mut Vec<Action>) -> R
     for i in 0..g.tiles.len() {
         let c = g.tiles[i].coordinates;
         if let Some(n) = g.tiles[i].unit {
-            let u = g.units[n as usize].clone();
+            let u = g.units[n as usize];
             if u.owner == p {
                 let max = crate::combat::max_health(g, t, &u)?;
                 let fx = crate::menu::unit_effect_list(g, u.effects);
@@ -249,6 +249,7 @@ pub fn winner(g: &mut Game) -> Result<(i32, bool), String> {
         real += i32::from(a && !g.player(p).unwrap().auto_play);
     }
     let (turn_limit, score_limit) = (rules.turn_limit, rules.score_limit);
+    #[allow(clippy::if_same_then_else)] // one branch per way a game ends, in the rules' order
     let completed = if real < 2 && (game_type == 1 || game_type == 4) || real == 0 {
         true
     } else if rules.win_by_extermination && alive_count == 1 {
@@ -485,7 +486,7 @@ pub fn start_turn(g: &mut Game, t: &Tables, p: i32, out: &mut Vec<Action>) -> Re
                             player: p,
                             delay: 10,
                             source: c,
-                            amount: amount,
+                            amount,
                         }));
                     }
                 }
@@ -501,7 +502,7 @@ pub fn start_turn(g: &mut Game, t: &Tables, p: i32, out: &mut Vec<Action>) -> Re
                     player: p,
                     delay: 10,
                     source: c,
-                    amount: amount,
+                    amount,
                 }));
             }
         }
@@ -595,7 +596,7 @@ fn diplomacy(g: &mut Game, i: usize, out: &mut Vec<Action>) -> Result<(), String
         if alive(g, sender)? {
             out.push(Action::TurnEffect(TurnEffect::ReceiveDiplomacyMessage {
                 player: p,
-                sender: sender,
+                sender,
                 kind: m.kind,
             }));
             if !knows(g, i, sender) {

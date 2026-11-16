@@ -141,11 +141,8 @@ fn route_children(out: &mut Vec<Action>, p: i32, q: i32) {
 
 pub(crate) fn base(out: &mut Vec<Action>, player: i32, command: u64) {
     out.extend([
-        Action::Payload(Payload::EndCommand {
-            player: player,
-            command: command,
-        }),
-        Action::Payload(Payload::RunDeferred { player: player }),
+        Action::Payload(Payload::EndCommand { player, command }),
+        Action::Payload(Payload::RunDeferred { player }),
     ]);
 }
 
@@ -216,7 +213,7 @@ pub(crate) fn attack_diplomacy(
     out.extend([
         Action::DestroyEmbassy {
             player: actor,
-            opponent: opponent,
+            opponent,
         },
         Action::DestroyEmbassy {
             player: opponent,
@@ -288,7 +285,7 @@ fn move_action(
     if player_index(g, p).is_err() {
         return Ok(());
     }
-    let unit = g.units[node as usize].clone();
+    let unit = g.units[node as usize];
     let Some(data) = t.units.get(unit.kind as usize) else {
         return Ok(());
     };
@@ -401,7 +398,7 @@ fn move_action(
         crate::explore::explore_from(g, p, c, sight, out)?;
     }
     // whether the unit embarks or disembarks at the destination
-    let target = g.tiles[to_i].clone();
+    let target = g.tiles[to_i];
     let water =
         target.terrain == WATER || target.terrain == OCEAN || crate::aquarion::wetland(&target);
     let land_unit = !has("swim") && !has("fly") && unit.leader == 0 && unit.follower == 0;
@@ -517,7 +514,7 @@ fn admit(g: &mut Game, t: &Tables, action: &engine_fast_frame::Action) -> Result
                 .tile(from)
                 .and_then(|x| x.unit)
                 .ok_or("move with no unit")?;
-            let unit = g.units[node as usize].clone();
+            let unit = g.units[node as usize];
             // Move validity: the unit can move and has data; the
             // path is checked where the Move searches it (`execute_command`)
             if unit.moved || crate::menu::unit_effect_list(g, unit.effects).contains(&FROZEN) {
@@ -565,7 +562,7 @@ fn admit(g: &mut Game, t: &Tables, action: &engine_fast_frame::Action) -> Result
                 .tile(origin)
                 .and_then(|x| x.unit)
                 .ok_or("attack with no unit")?;
-            let unit = g.units[node as usize].clone();
+            let unit = g.units[node as usize];
             crate::attack::admit_writes(g, t, &unit)?;
             Command::Attack {
                 unit: unit.id,
@@ -805,7 +802,7 @@ fn execute_command(
                     None
                 } else {
                     refresh_tech_cache(g, t, p)?;
-                    let unit = g.units[node as usize].clone();
+                    let unit = g.units[node as usize];
                     let path = crate::movement::unit_path(g, t, &unit, to)?;
                     Some(path.filter(|p| p.len() >= 2).ok_or(
                         "a Move with no path within the unit's movement: not a legal move",
@@ -828,7 +825,7 @@ fn execute_command(
                 }));
                 return Ok(());
             };
-            let unit = g.units[node as usize].clone();
+            let unit = g.units[node as usize];
             out.push(Action::MoveEffect(MoveEffect::Move {
                 player: p,
                 unit: id,
@@ -1119,11 +1116,7 @@ fn heal(g: &mut Game, t: &Tables, c: Xy, fixed: i64) -> Result<(), String> {
     let Some(tile) = g.tile(c) else { return Ok(()) };
     let Some(node) = tile.unit else { return Ok(()) };
     let owner = tile.owner;
-    let unit = g
-        .units
-        .get(node as usize)
-        .ok_or("unit node out of range")?
-        .clone();
+    let unit = *g.units.get(node as usize).ok_or("unit node out of range")?;
     if crate::menu::unit_effect_list(g, unit.effects).contains(&POISONED) {
         return crate::cymanti::cure(g, node);
     }
@@ -1165,11 +1158,7 @@ fn disband(
     let Some(node) = g.tiles[i].unit else {
         return Ok(());
     };
-    let unit = g
-        .units
-        .get(node as usize)
-        .ok_or("unit node out of range")?
-        .clone();
+    let unit = *g.units.get(node as usize).ok_or("unit node out of range")?;
     // the follower goes too (paid), and the leader lets go
     if unit.follower != 0 {
         if let Some(f) = crate::linked::find(g, unit.follower) {
@@ -1196,7 +1185,7 @@ fn disband(
         if paid && cost > 1 {
             for _ in 0..cost / 2 {
                 out.push(Action::Payload(Payload::IncreaseCurrency {
-                    player: player,
+                    player,
                     source: c,
                     amount: 1,
                     delay: 40,
@@ -1517,7 +1506,7 @@ fn execute_action(
                     let Some(n) = g.tile(target).and_then(|x| x.unit) else {
                         continue;
                     };
-                    let u = g.units[n as usize].clone();
+                    let u = g.units[n as usize];
                     if u.owner != p {
                         continue;
                     }

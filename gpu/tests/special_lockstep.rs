@@ -34,7 +34,7 @@ fn choose(legal: &[menu::Cand], rng: &mut u64) -> Option<Action> {
         .filter(|&i| ![END_TURN, RESIGN].contains(&legal[i].action.kind))
         .collect();
     let pick = match legal.iter().position(|c| c.action.kind == END_TURN) {
-        Some(e) if others.is_empty() || r % 8 == 0 => e,
+        Some(e) if others.is_empty() || r.is_multiple_of(8) => e,
         _ if !others.is_empty() => others[(r / 8) % others.len()],
         _ => return None,
     };
@@ -134,7 +134,7 @@ fn play(
             Err(s) if not_ported(&s.text, tally) => {}
             Err(s) => assert_eq!(
                 Err(&s.text),
-                want.as_ref().map(|_| &s.text).map_err(|e| e),
+                want.as_ref().map(|_| &s.text),
                 "{at}: {}",
                 s.text
             ),
@@ -154,11 +154,7 @@ fn play(
         match (twin_advance(&mut ours, flat, &action), &rust) {
             (Err(s), _) if not_ported(&s.text, tally) => {}
             (Ok(a), Ok(b)) => {
-                assert_eq!(
-                    a,
-                    u8::from(*b),
-                    "{at}: the elapsed flag differs ({action:?})"
-                );
+                assert_eq!(a, *b, "{at}: the elapsed flag differs ({action:?})");
                 let got = device::from_device(&ours, &before).unwrap();
                 let mut got = device::canonical(&got).unwrap();
                 let want = device::canonical(&g).unwrap();

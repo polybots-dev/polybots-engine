@@ -49,6 +49,7 @@ impl SystemRandom {
         }
     }
 
+    #[allow(clippy::should_implement_trait)] // a generator's draw, not an iterator: it never ends
     pub fn next(&mut self) -> i32 {
         self.current = if self.current == 55 {
             1

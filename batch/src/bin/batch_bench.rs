@@ -81,7 +81,7 @@ fn main() -> Result<(), String> {
                 .filter(|m| m[0] != END_TURN && m[0] != RESIGN)
                 .count();
             *chosen = match end {
-                Some(e) if others == 0 || r % 10 == 0 => e as i32,
+                Some(e) if others == 0 || r.is_multiple_of(10) => e as i32,
                 _ if others > 0 => {
                     let nth = (r / 10) % others;
                     legal

@@ -20,6 +20,9 @@
 //! - `unit_stats`: a foreign unit's effects, and its owner's techs through its defence bonus;
 //! - `names`: the home city of a unit, which may be unexplored.
 
+// a tile's index addresses the board and every output buffer alike
+#![allow(clippy::needless_range_loop)]
+
 use crate::state::{Game, Unit, Xy};
 use crate::tables::Tables;
 pub use crate::view::UNKNOWN;

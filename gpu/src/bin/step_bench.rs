@@ -50,7 +50,7 @@ fn positions(t: &Tables, size: i32, want: usize) -> Result<Vec<Game>, String> {
                 .filter(|&i| ![15, 35].contains(&legal[i].action.kind))
                 .collect();
             let pick = match legal.iter().position(|c| c.action.kind == 15) {
-                Some(e) if others.is_empty() || r % 10 == 0 => e,
+                Some(e) if others.is_empty() || r.is_multiple_of(10) => e,
                 _ if !others.is_empty() => others[(r / 10) % others.len()],
                 _ => break,
             };
@@ -138,9 +138,11 @@ fn main() -> Result<(), String> {
     let mut equal = 0;
     for slot in 0..games {
         let (want, taken) = &twin_after[slot % twin_after.len()];
-        if *taken == calls && !stopped[slot] && batch.download(slot)?.bytes() == want.bytes() {
-            equal += 1;
-        } else if *taken < calls && stopped[slot] {
+        // a slot that ran every call equals the host build's state; one that stopped early
+        // stopped where the host build did
+        if (*taken == calls && !stopped[slot] && batch.download(slot)?.bytes() == want.bytes())
+            || (*taken < calls && stopped[slot])
+        {
             equal += 1;
         }
     }

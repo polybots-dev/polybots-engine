@@ -238,7 +238,9 @@ fn rows(menu: &[u64]) -> Vec<Row> {
     let words: &[i32] = unsafe { std::slice::from_raw_parts(menu.as_ptr().cast(), menu.len() * 2) };
     let len = words[0] as usize;
     words[2..2 + len * 6]
-        .chunks_exact(6)
+        .as_chunks::<6>()
+        .0
+        .iter()
         .map(|r| [r[0], r[1], r[2], r[3], r[4], r[5]])
         .collect()
 }

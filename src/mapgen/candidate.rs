@@ -990,6 +990,7 @@ pub(crate) fn place_resource(
     let mut candidates = Vec::new();
     for (counter, &kind) in resources.iter().enumerate() {
         let probability = resource_probability(continent, kind);
+        #[allow(clippy::neg_cmp_op_on_partial_ord)] // a NaN draw skips the resource
         if probability == 0.0 || !(hash.value(&[c.x, c.y, counter as i32]) <= probability) {
             continue;
         }

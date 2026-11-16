@@ -7,7 +7,7 @@ use crate::tables::{DeviceTables, EfTables};
 use engine_fast::view::{LighthouseView, PlayerView, TaskView, View, TILE_PLANES};
 use std::mem::size_of;
 
-pub const PLANES: usize = 30;
+pub const PLANES: usize = 29;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

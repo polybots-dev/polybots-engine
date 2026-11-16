@@ -298,6 +298,7 @@ impl<T> Section<T> {
     }
 
     /// one past the largest id
+    #[allow(clippy::len_without_is_empty)] // an id bound, not a count of entries
     pub fn len(&self) -> usize {
         self.by_id.len()
     }
