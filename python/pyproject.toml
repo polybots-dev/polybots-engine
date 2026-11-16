@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "engine-fast"
+version = "0.1.0"
+description = "A fast Polytopia rules engine: many games per call, views and legal moves out."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.1"]
+
+[tool.maturin]
+module-name = "engine_fast"
+
+[tool.maturin.sbom]
+rust = false
+auditwheel = false

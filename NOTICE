@@ -1,0 +1,20 @@
+engine-fast
+Copyright 2026 nanobot
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+The Battle of Polytopia is a game by Midjiwan AB. This project is not affiliated with or
+endorsed by Midjiwan. It contains none of the game's code, data or assets: the rule data is
+read from the user's own installed copy of the game (tools/extract_rules.py).
+
+Third-party material in gpu/:
+
+- kernel/ef.h follows the approach, not the text, of engine-cu/src/pc.h in
+  kevinz917/superhuman-polytopia-bot (commit 03b8dd2, Apache-2.0): one function-qualifier
+  macro for a host and a device build, and helpers that reproduce Rust's float-to-integer
+  casts and wrapping arithmetic.
+- build.rs takes its compiler flags from engine-cu/Makefile of the same commit
+  (Apache-2.0): the flags that keep floats equal across builds (-ffp-contract=off, -fwrapv,
+  --fmad=false).
+
+No rule code from that project is in this tree.

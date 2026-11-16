@@ -1,0 +1,30 @@
+[package]
+name = "engine-fast-python"
+version = "0.1.0"
+edition = "2021"
+description = "Python package of engine-fast's batch interface; built with maturin."
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "engine_fast_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+engine-fast = { path = ".." }
+engine-fast-batch = { path = "../batch" }
+sha2 = "0.10"
+engine-fast-gpu = { path = "../gpu", optional = true }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py311"] }
+numpy = "0.23"
+
+[features]
+# the "gpu" backend (engine-fast/gpu, needs the CUDA toolkit's nvcc)
+cuda = ["dep:engine-fast-gpu", "engine-fast-gpu/cuda"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# overflow checks on, as in every build the engine is tested with
+overflow-checks = true

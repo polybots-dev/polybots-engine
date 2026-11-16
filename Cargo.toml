@@ -1,0 +1,16 @@
+[package]
+name = "engine-fast"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, exact Polytopia rules engine for training bots."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+engine-fast-frame = { path = "frame" }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3

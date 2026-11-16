@@ -1,0 +1,96 @@
+/* abilities.h - ability names as bit numbers: 0 to 75 as engine-fast/src/tables.rs ability_bit
+ * numbers them, then names the rules ask for that it has no bit for. ../src/tables.rs fills
+ * every mask with Abilities::has for each name, so a bit test here answers as `has` does. */
+#ifndef EF_ABILITIES_H
+#define EF_ABILITIES_H
+
+#include "ef.h"
+
+enum {
+    EF_AB_ALGAE,
+    EF_AB_ALIENCLIMATE,
+    EF_AB_AMPHIBIOUS,
+    EF_AB_ATTRACT,
+    EF_AB_AUTOFLOOD,
+    EF_AB_AUTOFREEZE,
+    EF_AB_BRIDGE,
+    EF_AB_BUBBLE,
+    EF_AB_CAPITALVISION,
+    EF_AB_CARRY,
+    EF_AB_CONSUMED,
+    EF_AB_CONVERT,
+    EF_AB_CREEP,
+    EF_AB_DASH,
+    EF_AB_DECOMPOSE,
+    EF_AB_DESTROY,
+    EF_AB_DISBAND,
+    EF_AB_DISCRETE,
+    EF_AB_DOUBLEATTACK,
+    EF_AB_DRENCH,
+    EF_AB_EAT,
+    EF_AB_EMBARK,
+    EF_AB_EMBASSY,
+    EF_AB_ESCAPE,
+    EF_AB_EXPLODE,
+    EF_AB_FLOOD,
+    EF_AB_FLOODED,
+    EF_AB_FLY,
+    EF_AB_FORTIFY,
+    EF_AB_FREELANCE,
+    EF_AB_FREEZE,
+    EF_AB_FREEZEAREA,
+    EF_AB_GLIDE,
+    EF_AB_GROW,
+    EF_AB_HEAL,
+    EF_AB_HIDE,
+    EF_AB_INDEPENDENT,
+    EF_AB_INFILTRATE,
+    EF_AB_LAND,
+    EF_AB_LIMITED,
+    EF_AB_LITERACY,
+    EF_AB_MANUAL,
+    EF_AB_MICROBES,
+    EF_AB_NETWORK,
+    EF_AB_PATINA,
+    EF_AB_PEACETREATY,
+    EF_AB_PERSIST,
+    EF_AB_POISON,
+    EF_AB_POISONRESIST,
+    EF_AB_PONTOON,
+    EF_AB_RAINBOWVISION,
+    EF_AB_SCOUT,
+    EF_AB_SIMPLE,
+    EF_AB_SKATE,
+    EF_AB_SNEAK,
+    EF_AB_SPLASH,
+    EF_AB_SPREAD,
+    EF_AB_STATIC,
+    EF_AB_STIFF,
+    EF_AB_STOMP,
+    EF_AB_SURPRISE,
+    EF_AB_SWARM,
+    EF_AB_SWIM,
+    EF_AB_TENTACLES,
+    EF_AB_UNIQUE,
+    EF_AB_WATER,
+    EF_AB_AUTOHEAL,
+    EF_AB_BOOST,
+    EF_AB_DISCIPLINE,
+    EF_AB_DOUBLED,
+    EF_AB_FILL,
+    EF_AB_NAVIGATE,
+    EF_AB_PICKY,
+    EF_AB_PROTECT,
+    EF_AB_SLOW,
+    EF_AB_TREEHOUSE,
+    EF_AB_NEWABILITY,
+    EF_AB_OTHER,
+    EF_ABILITY_COUNT
+};
+
+typedef struct { uint64_t lo, hi; } EfMask;
+
+EF_FN int ef_has(EfMask m, int bit) { return bit < 64 ? (int)((m.lo >> bit) & 1u) : (int)((m.hi >> (bit - 64)) & 1u); }
+EF_FN EfMask ef_mask_or(EfMask a, EfMask b) { a.lo |= b.lo; a.hi |= b.hi; return a; }
+
+#endif /* EF_ABILITIES_H */
