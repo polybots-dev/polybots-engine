@@ -240,8 +240,8 @@ fn rule_area(
                             .into(),
                     );
                 }
-                g.tiles[i].owner = player;
-                g.tiles[i].ruling_city = city;
+                g.tile_mut(i).owner = player;
+                g.tile_mut(i).ruling_city = city;
                 if is_city {
                     g.players[pi].cities = g.players[pi].cities.wrapping_add(1);
                 }
@@ -252,7 +252,7 @@ fn rule_area(
             }
             if !crate::explore::explored(g, i, player) {
                 crate::step::add_score(g, player, 5, out)?;
-                g.tiles[i].explorers.push(player);
+                g.tile_mut(i).explorers.push(player);
             }
             crate::economy::surrounding(g, t, player, c, out)?;
         }
@@ -283,7 +283,7 @@ fn explore_from_tile(
         }
         crate::step::add_score(g, player, 5, out)?;
         if !g.tiles[i].explorers.contains(&player) {
-            g.tiles[i].explorers.push(player);
+            g.tile_mut(i).explorers.push(player);
         }
     }
     if player != 255 && (g.players[pi].known_players.len() as i32) < g.players.len() as i32 - 1 {
@@ -340,7 +340,7 @@ fn set_tile_as_capital(
     g.players[pi].cities = 0;
     let climate = player_climate(g, pi)?;
     let skin = g.players[pi].skin;
-    let tile = &mut g.tiles[ti];
+    let tile = g.tile_mut(ti);
     tile.terrain = FIELD;
     tile.climate = climate;
     tile.skin = skin;
@@ -352,9 +352,9 @@ fn set_tile_as_capital(
     if bonus == 1 {
         city.level = 3;
     }
-    g.tiles[ti].improvement = Some(city);
+    g.tile_mut(ti).improvement = Some(city);
     g.name_city(ti, name);
-    g.tiles[ti].capital_of = player;
+    g.tile_mut(ti).capital_of = player;
     if bonus == 2 {
         if let Some(i) = area(g, target, 1).find(|&i| g.tiles[i].terrain == FIELD) {
             let mut fungi = village();
@@ -364,7 +364,7 @@ fn set_tile_as_capital(
             fungi.border_size = 0;
             fungi.founded = g.current_turn;
             fungi.founder = g.tiles[i].owner;
-            g.tiles[i].improvement = Some(fungi);
+            g.tile_mut(i).improvement = Some(fungi);
         }
     }
     rule_area(g, t, player, target, out)?;
@@ -531,7 +531,7 @@ impl Candidate<'_> {
                 .next_range(0, candidates.len() as i32)
                 .map_err(|e| format!("{e:?}"))? as usize;
             let site = candidates[position];
-            set_tile_as_city(&mut g.tiles[site as usize]);
+            set_tile_as_city(g.tile_mut(site as usize));
             remove_indices_near_index(&mut candidates, site, width, 2)
                 .map_err(|e| format!("{e:?}"))?;
         }
@@ -580,7 +580,7 @@ impl Candidate<'_> {
                 continents.push(old);
             }
         }
-        for tile in &mut self.g.tiles {
+        for tile in self.g.tiles_mut() {
             if let Some(id) = tile.continent {
                 tile.continent = Some(remap[id as usize]);
             }
@@ -626,7 +626,7 @@ impl Candidate<'_> {
                     .next_range(0, candidates.len() as i32)
                     .map_err(|e| format!("{e:?}"))?
                     as usize];
-                let tile = &mut g.tiles[chosen];
+                let tile = g.tile_mut(chosen);
                 tile.climate = self.continents[id].climate;
                 tile.skin = self.continents[id].skin;
                 tile.continent = Some(id as i32);
@@ -675,7 +675,7 @@ impl Candidate<'_> {
             }
             for &coord in &c.tiles {
                 let i = g.index(coord).ok_or("missing continent tile")?;
-                let tile = &mut g.tiles[i];
+                let tile = g.tile_mut(i);
                 if is_water(tile.terrain) || tile.improvement.is_some() {
                     continue;
                 }
@@ -739,7 +739,7 @@ impl Candidate<'_> {
             changes.push((i, terrain, altitude, resource));
         }
         for (i, terrain, altitude, resource) in changes {
-            let tile = &mut g.tiles[i];
+            let tile = g.tile_mut(i);
             tile.terrain = terrain;
             tile.altitude = altitude;
             tile.resource = resource;
@@ -751,7 +751,7 @@ impl Candidate<'_> {
         let g = &mut *self.g;
         for c in corners(g) {
             let i = g.index(c).ok_or("missing lighthouse corner")?;
-            let tile = &mut g.tiles[i];
+            let tile = g.tile_mut(i);
             let mut light = village();
             light.kind = LIGHTHOUSE;
             light.border_size = 0;
@@ -868,8 +868,8 @@ impl Candidate<'_> {
             }
         }
         for (i, terrain, kind) in placements {
-            g.tiles[i].terrain = terrain;
-            g.tiles[i].resource = Some(kind);
+            g.tile_mut(i).terrain = terrain;
+            g.tile_mut(i).resource = Some(kind);
         }
         Ok(())
     }
@@ -916,7 +916,7 @@ impl Candidate<'_> {
             let mut ruin = village();
             ruin.kind = RUIN;
             ruin.border_size = 0;
-            g.tiles[i].improvement = Some(ruin);
+            g.tile_mut(i).improvement = Some(ruin);
             placed += 1;
             water_count += i32::from(water);
             if placed > amount {
@@ -951,7 +951,7 @@ impl Candidate<'_> {
             }) {
                 continue;
             }
-            g.tiles[i].resource = Some(STARFISH);
+            g.tile_mut(i).resource = Some(STARFISH);
             placed += 1;
             if amount <= placed as f32 {
                 break;
@@ -980,7 +980,7 @@ pub(crate) fn place_resource(
         return Ok(());
     }
     let Some(continent) = tile.continent else {
-        g.tiles[i].terrain = ICE;
+        g.tile_mut(i).terrain = ICE;
         return Ok(());
     };
     let continent = continents
@@ -1020,8 +1020,8 @@ pub(crate) fn place_resource(
             &[c.x, c.y, resources.len() as i32],
         )
         .map_err(|_| "resource hash range")?;
-    g.tiles[i].improvement = None;
-    g.tiles[i].resource = Some(candidates[chosen as usize]);
+    g.tile_mut(i).improvement = None;
+    g.tile_mut(i).resource = Some(candidates[chosen as usize]);
     Ok(())
 }
 
@@ -1093,7 +1093,7 @@ pub(crate) fn draw(
     for p in &mut g.players {
         p.action.tasks.clear();
     }
-    for tile in &mut g.tiles {
+    for tile in g.tiles_mut() {
         *tile = cleared_tile(tile.coordinates);
     }
     Arc::make_mut(&mut g.side).names.fill(None);
@@ -1109,7 +1109,7 @@ pub(crate) fn draw(
     // the board is cleared and the noise map drawn on the same stream
     if !(islands && me.island_map(settings, preferred, &mut actions)?) {
         if islands {
-            for tile in &mut me.g.tiles {
+            for tile in me.g.tiles_mut() {
                 *tile = cleared_tile(tile.coordinates);
             }
         }
@@ -1162,10 +1162,10 @@ impl Candidate<'_> {
                     let target = self.g.tiles[i].coordinates;
                     set_tile_as_capital(self.g, self.t, player, target, actions)?;
                 } else {
-                    set_tile_as_city(&mut self.g.tiles[i]);
+                    set_tile_as_city(self.g.tile_mut(i));
                 }
             } else {
-                let tile = &mut self.g.tiles[i];
+                let tile = self.g.tile_mut(i);
                 if sample < ocean {
                     tile.terrain = OCEAN;
                     tile.altitude = -2;
@@ -1179,8 +1179,8 @@ impl Candidate<'_> {
             }
         }
         for &i in &sites.land_indices {
-            self.g.tiles[i as usize].terrain = FIELD;
-            self.g.tiles[i as usize].altitude = 1;
+            self.g.tile_mut(i as usize).terrain = FIELD;
+            self.g.tile_mut(i as usize).altitude = 1;
         }
         self.postterrain_cities(sites.postterrain_city_budget)?;
         self.climates(settings)
@@ -1200,8 +1200,8 @@ impl Candidate<'_> {
             self.starting_resources(pi)?;
             let (climate, skin) = (player_climate(self.g, pi)?, self.g.players[pi].skin);
             for i in area(self.g, start_tile(self.g, pi)?, 1) {
-                self.g.tiles[i].climate = climate;
-                self.g.tiles[i].skin = skin;
+                self.g.tile_mut(i).climate = climate;
+                self.g.tile_mut(i).skin = skin;
             }
         }
         self.make_ocean(convert)?;
@@ -1235,14 +1235,14 @@ impl Candidate<'_> {
                 let center = start_tile(self.g, pi)?;
                 for i in area(self.g, center, 1).chain(self.g.index(center)) {
                     if is_water(self.g.tiles[i].terrain) {
-                        self.g.tiles[i].terrain = ICE;
+                        self.g.tile_mut(i).terrain = ICE;
                     }
                 }
             }
         }
         for c in corners(self.g) {
             let i = self.g.index(c).ok_or("missing map corner")?;
-            self.g.tiles[i].explorers.clear();
+            self.g.tile_mut(i).explorers.clear();
         }
         Ok(())
     }

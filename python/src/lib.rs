@@ -1,5 +1,6 @@
-//! The Python module `engine_fast`: the batch interface as numpy arrays (README.md here).
-//! Every array is a fresh copy owned by the caller.
+//! The Python module `engine_fast`: the batch interface as numpy arrays, on the CPU or
+//! the GPU backend. README.md here documents every call. Every array is a fresh copy
+//! owned by the caller, except the GPU's `device_arrays`, which are device memory.
 
 use ::engine_fast::reset::Config;
 use ::engine_fast::view::TILE_PLANES;
@@ -19,7 +20,9 @@ const SEATS: usize = 4;
 const PLAYER_FIELDS: [&str; 4] = ["seat", "tribe", "relation", "score"];
 const SCALAR_FIELDS: [&str; 3] = ["viewer", "turn", "stars"];
 /// The optional outputs a batch can be made with.
-const OUTPUTS: [&str; 2] = ["previews", "defence"];
+const OUTPUTS: [&str; 4] = ["previews", "defence", "income", "max_health"];
+/// The outputs only the cpu backend computes.
+const CPU_OUTPUTS: [&str; 2] = ["income", "max_health"];
 
 #[cfg(feature = "cuda")]
 mod device;
@@ -51,6 +54,7 @@ fn rules(path: Option<String>) -> PyResult<String> {
 }
 
 /// The engine behind a `Batch`: the CPU batch, or with the `cuda` feature the GPU's.
+#[allow(clippy::large_enum_variant)] // one per Python batch, never moved in a loop
 enum Inner {
     Cpu(batch::Batch),
     #[cfg(feature = "cuda")]
@@ -118,8 +122,51 @@ impl Inner {
 struct Batch {
     inner: Inner,
     size: i32,
-    /// the optional outputs asked for when the batch was made: previews, defence
-    outputs: (bool, bool),
+    /// the optional outputs asked for when the batch was made, from `OUTPUTS`
+    outputs: Vec<&'static str>,
+}
+
+impl Batch {
+    /// Refuses a call for an output the batch was made without.
+    fn asked(&self, name: &str) -> PyResult<()> {
+        if self.outputs.contains(&name) {
+            Ok(())
+        } else {
+            Err(refuse(format!(
+                "the batch was made without outputs=(\"{name}\",)"
+            )))
+        }
+    }
+
+    /// The cpu batch, for a call only it answers.
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))]
+    fn cpu(&self, name: &str) -> PyResult<&batch::Batch> {
+        match &self.inner {
+            Inner::Cpu(b) => Ok(b),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(_) => Err(refuse(format!("{name}: the cpu backend only"))),
+        }
+    }
+
+    /// One plane per slot as int16 `[games, size * size]`, -1 for a slot without one.
+    fn planes<'py>(
+        &self,
+        py: Python<'py>,
+        planes: Vec<Option<Vec<i16>>>,
+    ) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        let cells = (self.size as usize).pow(2);
+        let mut out = Array2::from_elem((planes.len(), cells), -1i16);
+        for (slot, plane) in planes.into_iter().enumerate() {
+            let Some(p) = plane else { continue };
+            if p.len() != cells {
+                return Err(refuse(format!(
+                    "slot {slot}: a plane larger than the batch's"
+                )));
+            }
+            out.row_mut(slot).assign(&Array1::from_vec(p));
+        }
+        Ok(out.into_pyarray(py))
+    }
 }
 
 #[pymethods]
@@ -140,10 +187,15 @@ impl Batch {
         if let Some(o) = outputs.iter().find(|o| !OUTPUTS.contains(&o.as_str())) {
             return Err(refuse(format!("unknown output {o:?}: one of {OUTPUTS:?}")));
         }
-        let wanted = (
-            outputs.iter().any(|o| o == "previews"),
-            outputs.iter().any(|o| o == "defence"),
-        );
+        let wanted: Vec<&'static str> = OUTPUTS
+            .into_iter()
+            .filter(|n| outputs.iter().any(|o| o == n))
+            .collect();
+        if backend == "gpu" {
+            if let Some(o) = wanted.iter().find(|o| CPU_OUTPUTS.contains(o)) {
+                return Err(refuse(format!("output {o:?}: the cpu backend only")));
+            }
+        }
         let catalog = self::rules(rules)?;
         let inner = match backend {
             "cpu" => Inner::Cpu(batch::Batch::new(&catalog, games, workers).map_err(refuse)?),
@@ -155,8 +207,8 @@ impl Batch {
                     workers,
                     size as usize,
                     engine_fast_gpu::device::Outputs {
-                        previews: wanted.0,
-                        defence: wanted.1,
+                        previews: wanted.contains(&"previews"),
+                        defence: wanted.contains(&"defence"),
                     },
                 )
                 .map_err(refuse)?,
@@ -227,11 +279,7 @@ impl Batch {
     /// The attack preview of every legal row, as `moves()` lists them: int16 `[rows,
     /// len(PREVIEW_FIELDS)]`, zero for rows without one. Needs `outputs=("previews",)`.
     fn previews<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
-        if !self.outputs.0 {
-            return Err(refuse(
-                "the batch was made without outputs=(\"previews\",)".into(),
-            ));
-        }
+        self.asked("previews")?;
         self.inner.sync().map_err(refuse)?;
         let mut rows: Vec<i16> = Vec::new();
         for slot in 0..self.inner.len() {
@@ -252,33 +300,43 @@ impl Batch {
     /// `[games, size * size]`, -1 elsewhere and in slots not playing. Can show hidden state.
     /// Needs `outputs=("defence",)`.
     fn defence<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
-        if !self.outputs.1 {
-            return Err(refuse(
-                "the batch was made without outputs=(\"defence\",)".into(),
-            ));
-        }
+        self.asked("defence")?;
         self.inner.sync().map_err(refuse)?;
-        let n = self.inner.len();
-        let cells = (self.size as usize).pow(2);
-        let mut out = Array2::from_elem((n, cells), -1i16);
-        for slot in 0..n {
-            let plane = match &mut self.inner {
-                Inner::Cpu(b) => b.defence(slot).map_err(refuse)?,
+        let planes = (0..self.inner.len())
+            .map(|slot| match &mut self.inner {
+                Inner::Cpu(b) => b.defence(slot),
                 #[cfg(feature = "cuda")]
-                Inner::Gpu(b) => b.defence(slot).map_err(refuse)?,
-            };
-            if let Some(p) = plane {
-                if p.len() != cells {
-                    return Err(refuse(format!(
-                        "slot {slot}: a plane larger than the batch's"
-                    )));
-                }
-                for (k, v) in p.into_iter().enumerate() {
-                    out[[slot, k]] = v;
-                }
-            }
-        }
-        Ok(out.into_pyarray(py))
+                Inner::Gpu(b) => b.defence(slot),
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(refuse)?;
+        self.planes(py, planes)
+    }
+
+    /// The maximum health the unit panel displays (a carrier: its passenger's unless it has
+    /// Protect) of each unit the player to move sees, int16 `[games, size * size]`, -1
+    /// elsewhere and in slots not playing. Shows a seen foreign carrier's passenger through
+    /// it, as the game's screen does. Needs `outputs=("max_health",)`; the cpu backend only.
+    fn max_health<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.asked("max_health")?;
+        let b = self.cpu("max_health")?;
+        let planes = (0..b.len())
+            .map(|slot| b.max_health(slot))
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(refuse)?;
+        self.planes(py, planes)
+    }
+
+    /// The income the player to move is shown (units hidden from it count as absent), int32
+    /// `[games]`, -1 in slots not playing. Needs `outputs=("income",)`; the cpu backend only.
+    fn income<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i32>>> {
+        self.asked("income")?;
+        let b = self.cpu("income")?;
+        let out = (0..b.len())
+            .map(|slot| b.income(slot).map(|v| v.unwrap_or(-1)))
+            .collect::<Result<Vec<i32>, String>>()
+            .map_err(refuse)?;
+        Ok(Array1::from_vec(out).into_pyarray(py))
     }
 
     fn __len__(&self) -> usize {
@@ -327,6 +385,68 @@ impl Batch {
         }
         let inner = &mut self.inner;
         py.allow_threads(|| inner.reset(&games)).map_err(refuse)
+    }
+
+    /// Start games for `restart_finished` on background threads (gpu backend), after any
+    /// queued before: one per entry of `seeds`, with the rest as in `reset`.
+    #[pyo3(signature = (seeds, tribes, map=2, mode=4, action_limit=1000))]
+    fn queue(
+        &mut self,
+        seeds: PyArrayLike1<i64, AllowTypeChange>,
+        tribes: Vec<i32>,
+        map: i32,
+        mode: i32,
+        action_limit: u32,
+    ) -> PyResult<()> {
+        let seeds = seeds.as_array();
+        let mut games = Vec::with_capacity(seeds.len());
+        for &seed in seeds {
+            games.push(Config {
+                rules: 124,
+                seed: i32::try_from(seed).map_err(|_| refuse("seed out of range".into()))?,
+                size: self.size,
+                map,
+                mode,
+                tribes: tribes.clone(),
+                action_limit,
+            });
+        }
+        match &mut self.inner {
+            Inner::Cpu(_) => Err(refuse("queue needs the gpu backend".into())),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(b) => b.queue(games).map_err(refuse),
+        }
+    }
+
+    /// Games queued and not yet used, and of those the ones already built: (queued, ready).
+    fn queue_depth(&self) -> PyResult<(usize, usize)> {
+        match &self.inner {
+            Inner::Cpu(_) => Err(refuse("queue_depth needs the gpu backend".into())),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(b) => Ok((b.queued(), b.ready().map_err(refuse)?)),
+        }
+    }
+
+    /// Give every slot not playing (in slot order) the next queued game (in queue order), as
+    /// `reset` would, on the device alone; slots past the queue's end stay as they are. With
+    /// `wait` false, only games already built are used. Returns the slots restarted, in queue
+    /// order, a slot whose game was refused included (its status already refused). Read the
+    /// finished slots' outcomes before: the device arrays show the new games afterwards; the
+    /// other slots are untouched (gpu backend).
+    #[pyo3(signature = (wait=true))]
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] // `wait` is the gpu's
+    fn restart_finished<'py>(
+        &mut self,
+        py: Python<'py>,
+        wait: bool,
+    ) -> PyResult<Bound<'py, PyArray1<i64>>> {
+        let slots: Result<Vec<usize>, String> = match &mut self.inner {
+            Inner::Cpu(_) => Err("restart_finished needs the gpu backend".into()),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(b) => py.allow_threads(|| b.restart_finished(wait)),
+        };
+        let slots = slots.map_err(refuse)?;
+        Ok(Array1::from_iter(slots.into_iter().map(|k| k as i64)).into_pyarray(py))
     }
 
     /// Apply one move per slot: an index into the slot's legal moves, or -1 to leave the slot

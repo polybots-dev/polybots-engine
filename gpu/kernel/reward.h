@@ -181,7 +181,7 @@ EF_BIG EfResult ef_expand_city(EfGame *g, const EfTables *t, int32_t actor, EfXy
         for (int32_t yy = y0; yy <= y1; yy++) {
             EfXy c = ef_xy(xx, yy);
             const EfTile *x = ef_tile_c(g, c);
-            if (!ef_contains_u8(x->explorers_n, x->explorers_len_n, actor)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, actor, c)));
+            if (!ef_tile_explored(x, actor)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, actor, c)));
         }
     }
     return ef_ok();
@@ -213,7 +213,7 @@ EF_FN void ef_scout_lookup(const EfGame *g, const EfTables *t, int32_t p, EfXy c
     for (int index = 0; index < EF_SCOUT_SIZE; index++) {
         const EfTile *tile = ef_tile_c(g, ef_scout_coordinate(center, index));
         if (!tile) { lookup[index] = 0; continue; }
-        int explored = p == EF_NATURE || ef_contains_u8(tile->explorers_n, tile->explorers_len_n, p);
+        int explored = p == EF_NATURE || ef_tile_explored(tile, p);
         int has = tile->has_improvement_n;
         int32_t kind = tile->improvement.kind_n;
         int city = has && kind == EF_CITY;
@@ -235,7 +235,7 @@ EF_FN EfResult ef_scout_can_cross(EfGame *g, int32_t p, EfXy center, int from, i
     EfRelation *r;
     if (tile.owner_n != 0 && tile.owner_n != p) EF_TRY(ef_relation_entry(g, pi, tile.owner_n, &r));
     *out = 0;
-    if (!ef_contains_u8(tile.explorers_n, tile.explorers_len_n, p)) return ef_ok();
+    if (!ef_tile_explored(&tile, p)) return ef_ok();
     if (tile.unit_n != EF_NONE) {
         int32_t owner = ef_cunits(g)[tile.unit_n].owner_n;
         if (owner != p && ef_unit_effect(g, &ef_cunits(g)[tile.unit_n], EF_INVISIBLE_EFFECT)) EF_TRY(ef_relation_entry(g, pi, owner, &r));

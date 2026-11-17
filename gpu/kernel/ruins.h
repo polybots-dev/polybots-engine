@@ -71,7 +71,7 @@ EF_BIG EfResult ef_select_reward(EfGame *g, const EfTables *t, int32_t p, EfXy c
                 for (int32_t y = c.y - 2 < 0 ? 0 : c.y - 2; y <= (c.y + 2 > h - 1 ? h - 1 : c.y + 2); y++) {
                     if (x == c.x && y == c.y) continue;
                     const EfTile *x0 = ef_tile_c(g, ef_xy(x, y));
-                    if (!ef_contains_u8(x0->explorers_n, x0->explorers_len_n, p)) { unexplored = 1; break; }
+                    if (!ef_tile_explored(x0, p)) { unexplored = 1; break; }
                 }
             }
             valid = count > 0 && unexplored;

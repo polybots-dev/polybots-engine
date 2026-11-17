@@ -176,7 +176,7 @@ pub fn ruins(
         return Ok(());
     };
     let i = g.index(c).ok_or("ruins tile")?;
-    g.tiles[i].improvement = None;
+    g.tile_mut(i).improvement = None;
     if let Some(n) = g.tiles[i].unit {
         crate::units::make_exhausted(g, n)?;
     }
@@ -266,11 +266,11 @@ fn lost_city(
     let center = g.index(target).ok_or("lost city centre")?;
     for i in area(g, target, 1, false) {
         if g.tiles[i].terrain != ICE {
-            g.tiles[i].terrain = WATER;
-            g.tiles[i].altitude = -1;
+            g.tile_mut(i).terrain = WATER;
+            g.tile_mut(i).altitude = -1;
         }
     }
-    g.tiles[center].improvement = Some(crate::state::Improvement {
+    g.tile_mut(center).improvement = Some(crate::state::Improvement {
         kind: CITY,
         owner: 0,
         founder: 0,
@@ -290,9 +290,9 @@ fn lost_city(
     if g.side.names[center].is_some() {
         std::sync::Arc::make_mut(&mut g.side).names[center] = None;
     }
-    g.tiles[center].terrain = FIELD;
+    g.tile_mut(center).terrain = FIELD;
     if !g.tiles[center].effects.contains(&FLOODED) {
-        g.tiles[center].effects.try_push(FLOODED)?;
+        g.tile_mut(center).effects.try_push(FLOODED)?;
     }
     let mut continents: Vec<Continent> =
         serde_json::from_value(g.continents().clone()).map_err(|e| format!("continents: {e}"))?;
@@ -323,7 +323,7 @@ fn lost_city(
                 && x.owner == 0
             {
                 if g.tiles[i].continent.is_none() {
-                    g.tiles[i].continent = Some(id);
+                    g.tile_mut(i).continent = Some(id);
                 }
                 place_resource(g, t, i, &resources, &continents, hash)?;
             }

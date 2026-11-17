@@ -109,9 +109,9 @@ pub(crate) fn eat(
         return Ok(());
     }
     let s = crate::units::create_unit(g, t, actor, segment, target, out)?;
-    g.units[s as usize].leader = eater;
+    g.unit_mut(s as usize).leader = eater;
     let new_id = g.units[s as usize].id;
-    g.units[n as usize].follower = new_id;
+    g.unit_mut(n as usize).follower = new_id;
     let scout = t
         .units
         .get(segment as usize)

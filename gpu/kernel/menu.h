@@ -61,9 +61,12 @@ EF_FN uint32_t ef_row_hash(const EfRow *r) {
     return h ^ (h >> 15);
 }
 
-/* the per-list work: the unlocked improvements and build options, the shared move context
- * and the flood's arrays */
+/* the per-list work: per tile that rules territory, the limited improvement kinds already
+ * built within 2 of it on tiles it rules (ef_limited_kinds); the unlocked improvements and build
+ * options, the shared move context and the flood's arrays */
 typedef struct {
+    uint64_t limited[EF_MAX_TILES];
+    int32_t have_limited;
     int32_t unlocked_len, options_len, have_unlocked, have_mover;
     int32_t unlocked[EF_MAX_UNLOCKED];
     int32_t option_kind[EF_MAX_IMPROVEMENTS], option_cost[EF_MAX_IMPROVEMENTS], option_freelance[EF_MAX_IMPROVEMENTS];
@@ -271,9 +274,27 @@ EF_BIG EfResult ef_meets_adjacency(const EfGame *g, const EfTile *tile, const Ef
     return ef_ok();
 }
 
+/* For ef_can_build's `limited` test, once per list: per tile, the improvement kinds built on
+ * the other tiles it rules within 2 of it. The test asks whether such a tile holds the kind
+ * around the candidate's ruling city; one pass over the board answers it for every city. */
+EF_FN void ef_limited_kinds(const EfGame *g, EfMenuWork *w) {
+    for (int i = 0; i < g->tile_count; i++) w->limited[i] = 0;
+    for (int i = 0; i < g->tile_count; i++) {
+        const EfTile *o = &ef_ctiles(g)[i];
+        if (!o->has_improvement_n || o->improvement.kind_n < 0 || o->improvement.kind_n >= 64) continue;
+        EfXy city = o->ruling_city;
+        int32_t c = ef_tile_index(g, city);
+        if (c == EF_NONE || ef_xy_eq(o->coordinates, city)) continue;
+        int32_t dx = o->coordinates.x - city.x, dy = o->coordinates.y - city.y;
+        if (dx < -2 || dx > 2 || dy < -2 || dy > 2) continue;
+        w->limited[c] |= 1ull << o->improvement.kind_n;
+    }
+    w->have_limited = 1;
+}
+
 /* menu.rs can_build */
 EF_BIG EfResult ef_can_build(const EfGame *g, const EfTables *t, int32_t mover, const EfTile *tile, int32_t kind, EfMask abilities,
-                             int *ok) {
+                             const EfMenuWork *w, int *ok) {
     const EfImprovementData *d = &t->improvements[kind];
     *ok = 0;
     if (d->hidden) return ef_ok();
@@ -300,6 +321,11 @@ EF_BIG EfResult ef_can_build(const EfGame *g, const EfTables *t, int32_t mover, 
     if (!visible && manual) return ef_ok();
     if (ef_has(d->abilities, EF_AB_LIMITED)) {
         EfXy city = tile->ruling_city;
+        int32_t c = ef_tile_index(g, city);
+        /* the list's masks hold every on-board city; a city off the board keeps the scan */
+        if (w->have_limited && c != EF_NONE && kind >= 0 && kind < 64) {
+            if ((w->limited[c] >> kind) & 1u) return ef_ok();
+        } else
         for (int32_t y = city.y - 2; y <= city.y + 2; y++)
             for (int32_t x = city.x - 2; x <= city.x + 2; x++) {
                 const EfTile *o = ef_tile_c(g, ef_xy(x, y));
@@ -364,7 +390,7 @@ EF_FN EfResult ef_build_rows(const EfGame *g, const EfTables *t, int32_t mover, 
     for (int k = 0; k < w->options_len; k++) {
         if (tile->owner_n != mover && !w->option_freelance[k]) continue;
         int ok;
-        EF_TRY(ef_can_build(g, t, mover, tile, w->option_kind[k], abilities, &ok));
+        EF_TRY(ef_can_build(g, t, mover, tile, w->option_kind[k], abilities, w, &ok));
         if (ok) EF_TRY(ef_row(g, m, EF_K_BUILD, EF_NO, tile->coordinates, w->option_kind[k], -1, w->option_cost[k]));
     }
     return ef_ok();
@@ -476,7 +502,7 @@ EF_BIG EfResult ef_unit_rows(const EfGame *g, const EfTables *t, int32_t mover, 
             const EfImprovementData *x = &t->improvements[kind];
             if (!ef_has(x->abilities, EF_AB_MANUAL)) continue;
             int ok;
-            EF_TRY(ef_can_build(g, t, mover, tile, kind, abilities, &ok));
+            EF_TRY(ef_can_build(g, t, mover, tile, kind, abilities, w, &ok));
             if (!ok) continue;
             int32_t cost = x->has_cost ? x->cost : 0;
             if (p->currency >= cost) EF_TRY(ef_row(g, m, EF_K_BUILD, EF_NO, c, kind, -1, cost));
@@ -625,7 +651,7 @@ EF_FN int ef_row_before(const EfRow *a, const EfRow *b) {
         if (a->f[k] != b->f[k]) return a->f[k] < b->f[k];
     return 0;
 }
-/* the batch's sort, a heap sort (the rows are distinct, so its order is the batch's) */
+/* a heap sort, for a list with a kind outside 0..63 (none today) */
 EF_FN void ef_sift(EfRow *rows, int root, int n) {
     for (;;) {
         int child = 2 * root + 1;
@@ -638,7 +664,7 @@ EF_FN void ef_sift(EfRow *rows, int root, int n) {
         root = child;
     }
 }
-EF_FN void ef_sort_rows(EfMenu *m) {
+EF_FN void ef_heap_sort_rows(EfMenu *m) {
     int n = m->len;
     for (int k = n / 2 - 1; k >= 0; k--) ef_sift(m->rows, k, n);
     for (int end = n - 1; end > 0; end--) {
@@ -647,6 +673,52 @@ EF_FN void ef_sort_rows(EfMenu *m) {
         m->rows[end] = x;
         ef_sift(m->rows, 0, end);
     }
+}
+
+/* The batch's sort. The rows are distinct, so any correct sort gives the batch's order. Rows
+ * come tile by tile, so a stable counting sort by kind (the key's first field) leaves each kind's
+ * rows nearly in order, and an insertion sort within each kind finishes. The places are kept in
+ * the list's hash, which is free once the rows are made (ef_menu_clear refills it). */
+#define EF_SORT_KINDS 64
+EF_FN void ef_sort_rows(EfMenu *m) {
+    int32_t n = m->len;
+    if (n < 2) return;
+    int32_t at[EF_SORT_KINDS + 1], next[EF_SORT_KINDS];
+    for (int k = 0; k <= EF_SORT_KINDS; k++) at[k] = 0;
+    for (int32_t r = 0; r < n; r++) {
+        int32_t kind = m->rows[r].f[0];
+        if (kind < 0 || kind >= EF_SORT_KINDS) {
+            ef_heap_sort_rows(m);
+            return;
+        }
+        at[kind + 1]++;
+    }
+    for (int k = 0; k < EF_SORT_KINDS; k++) {
+        at[k + 1] += at[k];
+        next[k] = at[k];
+    }
+    int16_t *to = m->seen; /* n <= EF_MAX_ROWS < EF_ROW_HASH */
+    for (int32_t r = 0; r < n; r++) to[r] = (int16_t)next[m->rows[r].f[0]]++; /* narrow: < EF_MAX_ROWS */
+    /* each row to its place: a swap settles the row at d, and position r takes d's row */
+    for (int32_t r = 0; r < n; r++)
+        while (to[r] != r) {
+            int16_t d = to[r];
+            EfRow x = m->rows[d];
+            m->rows[d] = m->rows[r];
+            m->rows[r] = x;
+            to[r] = to[d];
+            to[d] = d;
+        }
+    for (int k = 0; k < EF_SORT_KINDS; k++)
+        for (int32_t r = at[k] + 1; r < at[k + 1]; r++) {
+            EfRow x = m->rows[r];
+            int32_t j = r - 1;
+            while (j >= at[k] && ef_row_before(&x, &m->rows[j])) {
+                m->rows[j + 1] = m->rows[j];
+                j--;
+            }
+            m->rows[j + 1] = x;
+        }
 }
 
 /* menu.rs menu, as the batch's sorted rows */
@@ -671,12 +743,14 @@ EF_BIG EfResult ef_menu(const EfGame *g, const EfTables *t, EfMenuWork *w, EfMen
     EfMask abilities = ef_player_abilities(g, t, mover);
     w->have_unlocked = 0;
     w->have_mover = 0;
+    w->have_limited = 0;
     for (int i = 0; i < g->tile_count; i++) {
-        if (!ef_contains_u8(ef_ctiles(g)[i].explorers_n, ef_ctiles(g)[i].explorers_len_n, mover)) continue;
+        if (!ef_tile_explored(&ef_ctiles(g)[i], mover)) continue;
         EF_TRY(ef_train_rows(g, t, mover, i, m));
         if (!w->have_unlocked) {
             EF_TRY(ef_unlocked_improvements(g, t, mover, w));
             EF_TRY(ef_build_options(g, t, mover, w));
+            ef_limited_kinds(g, w);
             w->have_unlocked = 1;
         }
         EF_TRY(ef_build_rows(g, t, mover, i, w, abilities, m));

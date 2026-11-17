@@ -78,9 +78,9 @@ fn a_move_by_a_unit_that_cannot_move_is_refused() {
         };
         if frozen {
             let list = g.units[node].effects as usize;
-            g.effect_lists[list].push(FROZEN);
+            g.effects_mut(list).unwrap().push(FROZEN);
         } else {
-            g.units[node].moved = true;
+            g.unit_mut(node).moved = true;
         }
         let err = step::advance(&mut g, &t, &move_to(from, next)).unwrap_err();
         assert!(err.contains("cannot move"), "frozen {frozen}: {err}");

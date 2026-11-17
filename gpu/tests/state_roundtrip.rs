@@ -290,7 +290,7 @@ fn rarely_set_fields_survive_the_block() {
         .iter()
         .position(|t| t.improvement.is_some())
         .unwrap();
-    let m = g.tiles[city].improvement.as_mut().unwrap();
+    let m = g.tile_mut(city).improvement.as_mut().unwrap();
     for kind in [1, 4, 4, 9, 13] {
         m.rewards.push(kind);
     }
@@ -388,23 +388,23 @@ fn narrowed_fields_refuse_what_does_not_fit() {
     type Set = fn(&mut Game, usize, i64);
     let cases: [(&str, i64, Set); 8] = [
         ("level", 65_535, |g, i, v| {
-            g.tiles[i].improvement.as_mut().unwrap().level = v as i32
+            g.tile_mut(i).improvement.as_mut().unwrap().level = v as i32
         }),
         ("founding turn", 32_767, |g, i, v| {
-            g.tiles[i].improvement.as_mut().unwrap().founded = v as i32
+            g.tile_mut(i).improvement.as_mut().unwrap().founded = v as i32
         }),
         ("production", 65_535, |g, i, v| {
-            g.tiles[i].improvement.as_mut().unwrap().production = v as i32
+            g.tile_mut(i).improvement.as_mut().unwrap().production = v as i32
         }),
         ("border size", 127, |g, i, v| {
-            g.tiles[i].improvement.as_mut().unwrap().border_size = v as i32
+            g.tile_mut(i).improvement.as_mut().unwrap().border_size = v as i32
         }),
-        ("tile owner", 255, |g, i, v| g.tiles[i].owner = v as i32),
-        ("terrain", 127, |g, i, v| g.tiles[i].terrain = v as i32),
+        ("tile owner", 255, |g, i, v| g.tile_mut(i).owner = v as i32),
+        ("terrain", 127, |g, i, v| g.tile_mut(i).terrain = v as i32),
         ("continent", 32_767, |g, i, v| {
-            g.tiles[i].continent = Some(v as i32)
+            g.tile_mut(i).continent = Some(v as i32)
         }),
-        ("tile skin", 127, |g, i, v| g.tiles[i].skin = v as i32),
+        ("tile skin", 127, |g, i, v| g.tile_mut(i).skin = v as i32),
     ];
     for (what, max, set) in cases {
         let mut ok = g.clone();
@@ -421,14 +421,14 @@ fn narrowed_fields_refuse_what_does_not_fit() {
     let node = g.tiles.iter().find_map(|x| x.unit).unwrap() as usize;
     type SetUnit = fn(&mut Game, usize, i64);
     let units: [(&str, i64, SetUnit); 5] = [
-        ("health", 65_535, |g, n, v| g.units[n].health = v as i32),
-        ("unit xp", 32_767, |g, n, v| g.units[n].xp = v as i32),
-        ("unit owner", 255, |g, n, v| g.units[n].owner = v as i32),
+        ("health", 65_535, |g, n, v| g.unit_mut(n).health = v as i32),
+        ("unit xp", 32_767, |g, n, v| g.unit_mut(n).xp = v as i32),
+        ("unit owner", 255, |g, n, v| g.unit_mut(n).owner = v as i32),
         ("promotion level", 127, |g, n, v| {
-            g.units[n].promotion_level = v as i32
+            g.unit_mut(n).promotion_level = v as i32
         }),
         ("creation turn", 32_767, |g, n, v| {
-            g.units[n].created_turn = v as i32
+            g.unit_mut(n).created_turn = v as i32
         }),
     ];
     for (what, max, set) in units {

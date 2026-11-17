@@ -234,7 +234,7 @@ pub fn explore(
     if explored(g, i, p) {
         return Ok(());
     }
-    g.tiles[i].explorers.push(p);
+    g.tile_mut(i).explorers.push(p);
     g.needs_routes = true;
     out.push(Action::Payload(Payload::IncreaseScore {
         player: p,

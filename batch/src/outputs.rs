@@ -1,5 +1,6 @@
 //! Optional outputs of the batch (the attack previews, defence bonus and
-//! city income are engine outputs every model may read). Each is asked
+//! city income are engine outputs every model may read, and so is the displayed
+//! maximum health of a unit). Each is asked
 //! for on its own and costs nothing unless asked for; none is part of the view, since some
 //! show what the view hides (engine-fast/src/queries.rs lists which).
 
@@ -52,7 +53,24 @@ pub fn defence_plane(g: &Game, t: &Tables, viewer: i32) -> Result<Vec<i16>, Stri
     Ok(out.defence)
 }
 
+/// The maximum health plane of `g` for `viewer`, as the unit panel displays it: what
+/// `Batch::max_health` gives for a slot holding `g` whose player to move is `viewer`.
+pub fn max_health_plane(g: &Game, t: &Tables, viewer: i32) -> Result<Vec<i16>, String> {
+    let mut out = UnitStats::default();
+    queries::unit_stats(g, t, viewer, &mut out)?;
+    Ok(out.max_health)
+}
+
 impl Batch {
+    /// The game of a playing slot and its player to move.
+    fn playing(&self, slot: usize) -> Option<(&Game, i32)> {
+        let s = &self.slots[slot];
+        let (Status::Playing, Some(g)) = (s.status, s.game.as_ref()) else {
+            return None;
+        };
+        Some((g, g.players[g.current_player_index as usize].action.id))
+    }
+
     /// The attack preview of each of `slot`'s legal rows, in `moves(slot)` order (only legal
     /// attacks between units the mover sees have one; no pairwise table). Empty when the slot
     /// is not playing. Shows hidden state as the game's attack forecast does: a seen foreign
@@ -72,11 +90,27 @@ impl Batch {
     /// the tiles (`queries::UNKNOWN` elsewhere), from `queries::unit_stats`. Can show hidden
     /// state: a foreign unit's effects and its owner's techs. None when the slot is not playing.
     pub fn defence(&self, slot: usize) -> Result<Option<Vec<i16>>, String> {
-        let s = &self.slots[slot];
-        let (Status::Playing, Some(g)) = (s.status, s.game.as_ref()) else {
-            return Ok(None);
-        };
-        let mover = g.players[g.current_player_index as usize].action.id;
-        defence_plane(g, &self.tables, mover).map(Some)
+        self.playing(slot)
+            .map(|(g, mover)| defence_plane(g, &self.tables, mover))
+            .transpose()
+    }
+
+    /// The income the player to move is shown (`queries::income`: units hidden from it count
+    /// as absent; an embassy's income reads the foreign capital, as the game's screen does).
+    /// None when the slot is not playing.
+    pub fn income(&self, slot: usize) -> Result<Option<i32>, String> {
+        self.playing(slot)
+            .map(|(g, mover)| queries::income(g, &self.tables, mover))
+            .transpose()
+    }
+
+    /// The maximum health the unit panel displays for every unit the mover sees that has one
+    /// (a carrier shows its passenger's unless it has Protect), one plane over the tiles
+    /// (`queries::UNKNOWN` elsewhere). Shows a seen foreign carrier's passenger through it, as
+    /// the game's screen does. None when the slot is not playing.
+    pub fn max_health(&self, slot: usize) -> Result<Option<Vec<i16>>, String> {
+        self.playing(slot)
+            .map(|(g, mover)| max_health_plane(g, &self.tables, mover))
+            .transpose()
     }
 }

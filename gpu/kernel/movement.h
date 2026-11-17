@@ -100,7 +100,7 @@ EF_FN const EfUnit *ef_occupant(const EfGame *g, const EfTile *t) {
 
 /* movement.rs Profile::visible */
 EF_FN const EfUnit *ef_profile_visible(const EfProfile *s, const EfTile *t) {
-    if (!ef_contains_u8(t->explorers_n, t->explorers_len_n, s->owner)) return 0;
+    if (!ef_tile_explored(t, s->owner)) return 0;
     const EfUnit *u = ef_occupant(s->g, t);
     if (!u) return 0;
     int hidden = ef_unit_effect(s->g, u, EF_INVISIBLE_EFFECT) && u->owner_n != s->owner
@@ -139,7 +139,7 @@ EF_FN int ef_profile_can_finish(const EfProfile *s, const EfTile *t) {
 EF_FN int ef_profile_accessible(const EfProfile *s, const EfTile *origin, const EfTile *target) {
     int owned_or_peace = target->owner_n == s->owner
                          || (target->owner_n != 0 && ef_relation(s->g, s->owner, target->owner_n) == EF_PEACE);
-    if (!ef_contains_u8(target->explorers_n, target->explorers_len_n, s->owner)) return 0;
+    if (!ef_tile_explored(target, s->owner)) return 0;
     const EfUnit *o = ef_profile_visible(s, target);
     if (o && !s->allow_occupied && o->owner_n != s->owner
         && !(o->owner_n != 0 && ef_relation(s->g, s->owner, o->owner_n) == EF_PEACE) && !s->hide)

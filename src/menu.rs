@@ -76,55 +76,123 @@ impl Cand {
 /// The whole menu, or Err naming the first family this position needs that is not implemented.
 pub fn menu(g: &Game, t: &Tables) -> Result<Vec<Cand>, String> {
     let _all = engine_fast_frame::timers::scope("menu");
-    let mover = g.players[g.current_player_index as usize].action.id;
+    if let Some(whole) = whole_menu(g)? {
+        return Ok(whole);
+    }
+    let mover = crate::step::mover(g);
+    let stars = g.player(mover).ok_or("missing mover")?.action.currency;
     let mut out = Vec::with_capacity(128);
-    if let Some(trigger) = g.triggers.iter().rev().find(|x| x.player == mover) {
-        out.extend(pending_choice(g, trigger)?);
-        out.extend(resign(g));
-        return Ok(out);
-    }
-    match g.current_state {
-        STARTED => {}
-        // FinalTurn without a pending reward: EndMatch alone, then the two-player Resign
-        FINAL_TURN => return Ok(final_turn(g)),
-        _ => return Err("phase other than Started/FinalTurn".into()),
-    }
-    let queued = !g.actions.is_empty() || g.current_command != g.commands;
-    if queued {
-        return Ok(Vec::new());
-    }
-    let mut unlocked: Option<Vec<usize>> = None;
-    let mut builds: Vec<BuildOption> = Vec::new();
-    let abilities = player_abilities(g, t, mover);
-    // what the mover's units share in the move search, worked out at the first unit that moves
-    let mut moving = None;
+    let (mut shared, mut moving) = (None, None);
+    let mut limited = Limited::default();
     for (i, tile) in g.tiles.iter().enumerate() {
         if !tile.explorers.contains(&mover) {
             continue;
         }
-        train_into(g, t, mover, i, &mut out)?;
-        // computed where the first tile's build family would compute it, then reused
-        if unlocked.is_none() {
-            let list = unlocked_improvements(g, t, mover)?;
-            builds = build_options(g, t, mover, &list)?;
-            unlocked = Some(list);
-        }
-        let known = unlocked.as_deref().unwrap_or_default();
-        build_with(g, t, mover, i, &builds, abilities, &mut out)?;
-        improvement_abilities_into(g, t, mover, i, abilities, &mut out);
-        unit_actions_with(g, t, mover, i, Some(known), abilities, &mut out)?;
-        crate::movement::moves_at(g, t, mover, i, &mut moving, &mut out)?;
-        crate::combat::attacks_into(g, t, mover, i, &mut out)?;
+        tile_rows(g, t, mover, i, &mut shared, &mut limited, stars, &mut out)?;
+        let mut reads = crate::movement::Reads::NONE;
+        unit_rows(g, t, mover, i, &mut moving, &mut reads, &mut out)?;
     }
+    tail(g, t, mover, &mut out)?;
+    Ok(out)
+}
+
+/// The menu when it is not built tile by tile: a pending choice, the final turn, or nothing
+/// while actions are queued. None in the Started phase with nothing queued.
+pub(crate) fn whole_menu(g: &Game) -> Result<Option<Vec<Cand>>, String> {
+    let mover = crate::step::mover(g);
+    if let Some(trigger) = g.triggers.iter().rev().find(|x| x.player == mover) {
+        let mut out = pending_choice(g, trigger)?;
+        out.extend(resign(g));
+        return Ok(Some(out));
+    }
+    match g.current_state {
+        STARTED => {}
+        // FinalTurn without a pending reward: EndMatch alone, then the two-player Resign
+        FINAL_TURN => return Ok(Some(final_turn(g))),
+        _ => return Err("phase other than Started/FinalTurn".into()),
+    }
+    let queued = !g.actions.is_empty() || g.current_command != g.commands;
+    Ok(queued.then(Vec::new))
+}
+
+/// What the tile families share across tiles for one mover: its unlocked improvements, the
+/// build options and its ability mask. It reads only the mover's player record (techs,
+/// tasks) and, through `stars`, its currency.
+pub(crate) struct Shared {
+    unlocked: Vec<usize>,
+    builds: Vec<BuildOption>,
+    abilities: u128,
+}
+
+/// The tile families on explored tile `i`, in order: train, build, improvement abilities, unit
+/// actions. A priced row is kept only when its price is at most `stars` (`i32::MAX` keeps
+/// all; every star check in these families is that test on the row's own price). `shared` is
+/// worked out at the first call, where the first tile's build family needs it; `limited` is
+/// for one state only (one list).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tile_rows(
+    g: &Game,
+    t: &Tables,
+    mover: i32,
+    i: usize,
+    shared: &mut Option<Shared>,
+    limited: &mut Limited,
+    stars: i32,
+    out: &mut Vec<Cand>,
+) -> Result<(), String> {
+    train_into(g, t, mover, i, stars, out)?;
+    if shared.is_none() {
+        let unlocked = unlocked_improvements(g, t, mover)?;
+        // every price: `build_with` keeps those up to `stars`, which can differ between calls
+        let builds = build_options(t, &unlocked, i32::MAX)?;
+        *shared = Some(Shared {
+            unlocked,
+            builds,
+            abilities: player_abilities(g, t, mover),
+        });
+    }
+    let s = shared.as_ref().unwrap();
+    build_with(g, t, mover, i, &s.builds, s.abilities, stars, limited, out)?;
+    improvement_abilities_into(g, t, mover, i, s.abilities, out);
+    unit_actions_with(
+        g,
+        t,
+        mover,
+        i,
+        Some(&s.unlocked),
+        s.abilities,
+        stars,
+        limited,
+        out,
+    )
+}
+
+/// The moves, then the attacks, of the mover's unit on tile `i` (none without one). `reads`
+/// gets the tiles the move search read (`movement::moves_at`).
+pub(crate) fn unit_rows(
+    g: &Game,
+    t: &Tables,
+    mover: i32,
+    i: usize,
+    moving: &mut Option<crate::movement::Mover>,
+    reads: &mut crate::movement::Reads,
+    out: &mut Vec<Cand>,
+) -> Result<(), String> {
+    crate::movement::moves_at(g, t, mover, i, moving, reads, out)?;
+    crate::combat::attacks_into(g, t, mover, i, out)
+}
+
+/// After the tiles: research, diplomacy, each command once, EndTurn, and Resign.
+pub(crate) fn tail(g: &Game, t: &Tables, mover: i32, out: &mut Vec<Cand>) -> Result<(), String> {
     {
         let _t = engine_fast_frame::timers::scope("menu.research and diplomacy");
         out.extend(research(g, t, mover)?);
         out.extend(diplomacy(g, t, mover)?);
     }
-    once_each(&mut out);
+    once_each(out);
     out.push(cand(kind::END_TURN));
     out.extend(resign(g));
-    Ok(out)
+    Ok(())
 }
 
 /// Keep the first candidate of each distinct command, in order (the game adds each
@@ -237,7 +305,19 @@ pub(crate) fn tech_price(g: &Game, t: &Tables, p: &crate::state::Player, tech: u
 /// in catalog tree order
 pub(crate) fn unlockable_techs(g: &Game, t: &Tables, player: i32) -> Result<Vec<usize>, String> {
     let p = g.player(player).ok_or("missing player")?;
-    let known = |id: usize| p.available_tech.contains(&(id as i32));
+    // the known techs as bits, asked once each instead of searched for every parent and child
+    let mask = p
+        .available_tech
+        .iter()
+        .filter(|&&k| (0..128).contains(&k))
+        .fold(0u128, |m, &k| m | 1 << k);
+    let known = |id: usize| {
+        if id < 128 {
+            mask >> id & 1 == 1
+        } else {
+            p.available_tech.contains(&(id as i32))
+        }
+    };
     let mut unlockable: Vec<usize> = Vec::new();
     let tree = t.tribe_tree(p.tribe)?;
     for &parent in tribe_tech(t, p.tribe)? {
@@ -280,7 +360,8 @@ pub mod kind_train {
 /// ruling city below its unit support (units homed there <= city level).
 pub fn train_at(g: &Game, t: &Tables, mover: i32, i: usize) -> Result<Vec<Cand>, String> {
     let mut out = Vec::new();
-    train_into(g, t, mover, i, &mut out)?;
+    let stars = g.player(mover).ok_or("missing mover")?.action.currency;
+    train_into(g, t, mover, i, stars, &mut out)?;
     Ok(out)
 }
 
@@ -290,6 +371,7 @@ fn train_into(
     t: &Tables,
     mover: i32,
     i: usize,
+    stars: i32,
     out: &mut Vec<Cand>,
 ) -> Result<(), String> {
     let tile = &g.tiles[i];
@@ -345,7 +427,7 @@ fn train_into(
                     continue;
                 }
             }
-            if p.action.currency < u.cost {
+            if stars < u.cost {
                 continue;
             }
             let Some((at, level)) = home else { continue };
@@ -432,7 +514,8 @@ fn unlocked_improvements(g: &Game, t: &Tables, mover: i32) -> Result<Vec<usize>,
 /// Build candidates on one tile (unlocked improvements except `manual`,
 /// each allowed by `can_build` and affordable).
 pub fn build_at(g: &Game, t: &Tables, mover: i32, i: usize) -> Result<Vec<Cand>, String> {
-    let options = build_options(g, t, mover, &unlocked_improvements(g, t, mover)?)?;
+    let stars = g.player(mover).ok_or("missing mover")?.action.currency;
+    let options = build_options(t, &unlocked_improvements(g, t, mover)?, stars)?;
     let mut out = Vec::new();
     build_with(
         g,
@@ -441,6 +524,8 @@ pub fn build_at(g: &Game, t: &Tables, mover: i32, i: usize) -> Result<Vec<Cand>,
         i,
         &options,
         player_abilities(g, t, mover),
+        stars,
+        &mut Limited::default(),
         &mut out,
     )?;
     Ok(out)
@@ -455,14 +540,8 @@ struct BuildOption {
 }
 
 /// The tile-independent part of the build family: the unlocked kinds in order, each once,
-/// that are not unit-built (`manual`) or hidden and that the mover can pay for.
-fn build_options(
-    g: &Game,
-    t: &Tables,
-    mover: i32,
-    unlocked: &[usize],
-) -> Result<Vec<BuildOption>, String> {
-    let stars = g.player(mover).ok_or("missing mover")?.action.currency;
+/// that are not unit-built (`manual`) or hidden and that cost at most `stars`.
+fn build_options(t: &Tables, unlocked: &[usize], stars: i32) -> Result<Vec<BuildOption>, String> {
     let mut out: Vec<BuildOption> = Vec::new();
     for &kind in unlocked {
         let d = t.improvements.get(kind).unwrap();
@@ -485,7 +564,8 @@ fn build_options(
 }
 
 /// `build_at` given the mover's build options and abilities (the same for every tile),
-/// appending to `out`
+/// keeping those that cost at most `stars`, appending to `out`
+#[allow(clippy::too_many_arguments)]
 fn build_with(
     g: &Game,
     t: &Tables,
@@ -493,15 +573,17 @@ fn build_with(
     i: usize,
     options: &[BuildOption],
     abilities: u128,
+    stars: i32,
+    limited: &mut Limited,
     out: &mut Vec<Cand>,
 ) -> Result<(), String> {
     let tile = &g.tiles[i];
-    for o in options {
+    for o in options.iter().filter(|o| o.cost <= stars) {
         // outside the mover's territory only freelance improvements pass `can_build`
         if tile.owner != mover && !o.freelance {
             continue;
         }
-        if !can_build(g, t, mover, tile, o.kind, abilities)? {
+        if !can_build(g, t, mover, tile, o.kind, abilities, limited)? {
             continue;
         }
         out.push(
@@ -514,6 +596,40 @@ fn build_with(
     Ok(())
 }
 
+/// The improvement kinds around each ruling city that a `limited` kind looks for (a tile within
+/// two of the city, ruled by it, not the city itself), worked out once per city per list
+/// rather than for every tile and kind: the board does not change while a list is built.
+#[derive(Default)]
+pub(crate) struct Limited(Vec<(Xy, u128)>);
+
+impl Limited {
+    /// whether a tile ruled by `city` already holds `kind`
+    fn taken(&mut self, g: &Game, city: Xy, kind: usize) -> bool {
+        // only tiles within two of the city can match
+        let near = |c: Xy| {
+            (c.y - 2..=c.y + 2)
+                .flat_map(move |y| (c.x - 2..=c.x + 2).map(move |x| Xy { x, y }))
+                .filter_map(|xy| g.tile(xy))
+                .filter(move |x| x.coordinates != c && x.ruling_city == c)
+                .filter_map(|x| x.improvement.as_ref().map(|m| m.kind))
+        };
+        if kind >= 128 {
+            return near(city).any(|k| k == kind as i32);
+        }
+        let mask = match self.0.iter().find(|(c, _)| *c == city) {
+            Some(&(_, m)) => m,
+            None => {
+                let m = near(city)
+                    .filter(|k| (0..128).contains(k))
+                    .fold(0u128, |m, k| m | 1 << k);
+                self.0.push((city, m));
+                m
+            }
+        };
+        mask >> kind & 1 == 1
+    }
+}
+
 /// Whether the player may build the improvement on the tile.
 fn can_build(
     g: &Game,
@@ -522,6 +638,7 @@ fn can_build(
     tile: &crate::state::Tile,
     kind: usize,
     abilities: u128,
+    limited: &mut Limited,
 ) -> Result<bool, String> {
     let d = t.improvements.get(kind).unwrap();
     let has = |a: &str| d.improvement_abilities.has(a);
@@ -563,22 +680,8 @@ fn can_build(
         None if has("manual") => return Ok(false),
         _ => {}
     }
-    if has("limited") {
-        let city = tile.ruling_city;
-        // only tiles within two of the city can match
-        let mut near = (city.y - 2..=city.y + 2)
-            .flat_map(|y| (city.x - 2..=city.x + 2).map(move |x| Xy { x, y }))
-            .filter_map(|c| g.tile(c));
-        let taken = near.any(|x| {
-            x.coordinates != city
-                && x.ruling_city == city
-                && x.improvement
-                    .as_ref()
-                    .is_some_and(|m| m.kind == kind as i32)
-        });
-        if taken {
-            return Ok(false);
-        }
+    if has("limited") && limited.taken(g, tile.ruling_city, kind) {
+        return Ok(false);
     }
     if has("unique") {
         let built = g
@@ -912,6 +1015,7 @@ pub(crate) fn unit_effect_list(g: &Game, index: u32) -> &[i64] {
 /// current-player and trigger checks are not repeated here.
 pub fn unit_actions_at(g: &Game, t: &Tables, mover: i32, i: usize) -> Result<Vec<Cand>, String> {
     let mut out = Vec::new();
+    let stars = g.player(mover).ok_or("missing mover")?.action.currency;
     unit_actions_with(
         g,
         t,
@@ -919,6 +1023,8 @@ pub fn unit_actions_at(g: &Game, t: &Tables, mover: i32, i: usize) -> Result<Vec
         i,
         None,
         player_abilities(g, t, mover),
+        stars,
+        &mut Limited::default(),
         &mut out,
     )?;
     Ok(out)
@@ -926,7 +1032,8 @@ pub fn unit_actions_at(g: &Game, t: &Tables, mover: i32, i: usize) -> Result<Vec
 
 /// `unit_actions_at`, appending to `out`; `unlocked` is the mover's unlocked improvements when
 /// the caller has them, otherwise they are computed if a unit can build; `abilities` is the
-/// mover's ability mask (`player_abilities`)
+/// mover's ability mask (`player_abilities`); a priced row is kept up to `stars`
+#[allow(clippy::too_many_arguments)]
 fn unit_actions_with(
     g: &Game,
     t: &Tables,
@@ -934,6 +1041,8 @@ fn unit_actions_with(
     i: usize,
     unlocked: Option<&[usize]>,
     abilities: u128,
+    stars: i32,
+    limited: &mut Limited,
     out: &mut Vec<Cand>,
 ) -> Result<(), String> {
     let tile = &g.tiles[i];
@@ -1051,11 +1160,10 @@ fn unit_actions_with(
         out.push(action(kind_unit::BREAK_ICE).option(0));
     }
     if !has(u, "grow")? {
-        let p = g.player(mover).ok_or("missing mover")?;
         let territory = tile.owner == mover || tile.owner != 0 && rel == PEACE;
         crate::units::upgradable(g, t, mover, u.kind, |id| {
             let d = t.units.get(id).unwrap();
-            if territory && p.action.currency >= d.cost {
+            if territory && stars >= d.cost {
                 out.push(action(kind_unit::UPGRADE).option(id as i32).price(d.cost));
             }
             true
@@ -1076,7 +1184,6 @@ fn unit_actions_with(
         out.push(action(kind_unit::EXPLODE));
     }
     if can_attack && !u.moved && !frozen {
-        let p = g.player(mover).ok_or("missing mover")?;
         let computed;
         let unlocked = match unlocked {
             Some(u) => u,
@@ -1088,12 +1195,12 @@ fn unit_actions_with(
         for &kind in unlocked {
             let d = t.improvements.get(kind).unwrap();
             if !d.improvement_abilities.has("manual")
-                || !can_build(g, t, mover, tile, kind, abilities)?
+                || !can_build(g, t, mover, tile, kind, abilities, limited)?
             {
                 continue;
             }
             let cost = d.cost.unwrap_or(0);
-            if p.action.currency >= cost {
+            if stars >= cost {
                 out.push(
                     cand(kind_build::BUILD)
                         .target(c)
@@ -1115,6 +1222,80 @@ fn unit_actions_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+
+    /// The kept list of what `limited` kinds look for gives the same answer as the scan around
+    /// the city it replaces, for every tile's ruling city and every improvement kind, on states
+    /// of random games with cities that have grown and built.
+    #[test]
+    fn limited_kinds_by_city_equal_the_scan() {
+        let t = Tables::compile(CATALOG).unwrap();
+        let scan = |g: &Game, city: Xy, kind: usize| {
+            (city.y - 2..=city.y + 2)
+                .flat_map(|y| (city.x - 2..=city.x + 2).map(move |x| Xy { x, y }))
+                .filter_map(|c| g.tile(c))
+                .any(|x| {
+                    x.coordinates != city
+                        && x.ruling_city == city
+                        && x.improvement
+                            .as_ref()
+                            .is_some_and(|m| m.kind == kind as i32)
+                })
+        };
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut draw = |n: usize| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % n as u64) as usize
+        };
+        let (mut asked, mut taken) = (0, 0);
+        for seed in 1..=10 {
+            let config = crate::reset::Config {
+                rules: 124,
+                seed,
+                size: [11, 16][seed as usize % 2],
+                map: 2,
+                mode: 4,
+                tribes: vec![7, 7],
+                action_limit: 900,
+            };
+            let mut g = crate::reset::reset(&config, CATALOG, &t).unwrap();
+            for decision in 0..900 {
+                let Ok(legal) = menu(&g, &t) else { break };
+                if legal.is_empty() {
+                    break;
+                }
+                // builds are what make limited kinds appear: prefer them
+                let builds: Vec<&Cand> = legal.iter().filter(|c| c.action.kind == 1).collect();
+                let pick = if !builds.is_empty() && draw(2) == 0 {
+                    builds[draw(builds.len())].action.clone()
+                } else {
+                    legal[draw(legal.len())].action.clone()
+                };
+                if crate::step::step(&mut g, &t, &pick).is_err() {
+                    break;
+                }
+                if decision % 25 != 0 {
+                    continue;
+                }
+                let mut limited = Limited::default();
+                for x in g.tiles.iter() {
+                    for kind in 0..t.improvements.len() {
+                        let want = scan(&g, x.ruling_city, kind);
+                        assert_eq!(limited.taken(&g, x.ruling_city, kind), want);
+                        asked += 1;
+                        taken += usize::from(want);
+                    }
+                }
+            }
+        }
+        assert!(
+            asked > 100_000 && taken > 100,
+            "{asked} asked, {taken} taken"
+        );
+    }
 
     #[test]
     fn once_each_keeps_the_first_of_each_command_in_order() {

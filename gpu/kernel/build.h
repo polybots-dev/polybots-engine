@@ -102,7 +102,7 @@ EF_BIG EfResult ef_build(EfGame *g, const EfTables *t, int32_t player, int32_t k
             /* created unless the player already sees a resource there (infiltrate.rs
              * visible_resource) */
             const EfTile *x = &ef_ctiles(g)[i];
-            int explored = player == EF_NATURE || ef_contains_u8(x->explorers_n, x->explorers_len_n, player);
+            int explored = player == EF_NATURE || ef_tile_explored(x, player);
             int seen = 0;
             if (explored && x->has_resource_n && !x->has_improvement_n) EF_TRY(ef_resource_revealed(g, t, player, x->resource_n, &seen));
             if (!seen) {

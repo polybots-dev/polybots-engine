@@ -196,8 +196,8 @@ fn starting_roster(g: &mut Game, t: &Tables) -> Result<(), String> {
         if !over.is_empty() {
             return Err("a score-limit win at game start not implemented".into());
         }
-        g.units[node as usize].moved = false;
-        g.units[node as usize].attacked = false;
+        g.unit_mut(node as usize).moved = false;
+        g.unit_mut(node as usize).attacked = false;
     }
     Ok(())
 }

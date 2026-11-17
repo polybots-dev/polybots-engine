@@ -276,7 +276,7 @@ EF_BIG EfResult ef_capture_city(EfGame *g, const EfTables *t, int32_t actor, EfX
         for (int32_t yy = y0; yy <= y1; yy++) {
             EfXy c = ef_xy(xx, yy);
             const EfTile *x = ef_tile_c(g, c);
-            if (!ef_contains_u8(x->explorers_n, x->explorers_len_n, actor)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, actor, c)));
+            if (!ef_tile_explored(x, actor)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, actor, c)));
         }
     }
     int32_t ids[EF_MAX_PLAYERS];
@@ -301,7 +301,7 @@ EF_BIG EfResult ef_capture_city(EfGame *g, const EfTables *t, int32_t actor, EfX
         int32_t level;
         EF_TRY(ef_embassy_level(g, ai, ids[k], &level));
         const EfTile *x = &ef_ctiles(g)[center];
-        if (level >= 2 && !ef_contains_u8(x->explorers_n, x->explorers_len_n, ids[k]))
+        if (level >= 2 && !ef_tile_explored(x, ids[k]))
             EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, ids[k], city)));
     }
     ef_tiles(g)[center].terrain_n = EF_FIELD; /* narrow: a terrain constant */

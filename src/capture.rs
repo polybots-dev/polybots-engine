@@ -243,12 +243,12 @@ pub fn capture_city(
             .get(kind as usize)
             .is_some_and(|d| d.unit_abilities.has("independent"))
         {
-            g.units[n as usize].home = city;
+            g.unit_mut(n as usize).home = city;
         }
     }
     let nodes: Vec<u32> = g.tiles.iter().filter_map(|x| x.unit).collect();
     for n in nodes {
-        let u = &mut g.units[n as usize];
+        let u = g.unit_mut(n as usize);
         if u.owner != actor && u.home == city {
             u.home = NULL;
         }
@@ -284,8 +284,8 @@ pub fn capture_city(
                 }));
             }
         }
-        g.tiles[i].owner = actor;
-        g.tiles[i].ruling_city = city;
+        g.tile_mut(i).owner = actor;
+        g.tile_mut(i).ruling_city = city;
     }
     if g.tiles[center].improvement.as_ref().unwrap().level > 1 {
         if g.players[ai].task(6).is_none() {
@@ -379,7 +379,7 @@ pub fn capture_city(
         }
     }
     // the city tile becomes field, flooded by a flooding tribe and drained by any other
-    g.tiles[center].terrain = FIELD;
+    g.tile_mut(center).terrain = FIELD;
     if tribe_has(g, t, ai, "flooded") {
         crate::aquarion::flood_tile(g, actor, city)?;
     } else {

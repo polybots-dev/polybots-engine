@@ -111,10 +111,13 @@ fn accessible(
     allowed: u32,
     from: usize,
     to: usize,
+    reads: &mut Reads,
 ) -> Result<bool, String> {
+    reads.tile(from);
+    reads.tile(to);
     let owner = g.tiles[to].owner;
     let r = if owner != 0 {
-        Some(relation_state(g, p, owner)?)
+        Some(reads.relation(g, p, owner)?)
     } else {
         None
     };
@@ -131,6 +134,14 @@ fn accessible(
         if improvement_has(t, k, "bridge") {
             if k == BRIDGE && !has_terrain(allowed, target.terrain) {
                 let c = target.coordinates;
+                for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+                    if let Some(i) = g.index(Xy {
+                        x: c.x + dx,
+                        y: c.y + dy,
+                    }) {
+                        reads.tile(i);
+                    }
+                }
                 let anchor = |dx: i32, dy: i32| {
                     g.index(Xy {
                         x: c.x + dx,
@@ -167,7 +178,7 @@ fn accessible(
             && !crate::aquarion::wetland(origin)
         {
             let embark = kind.is_some_and(|k| improvement_has(t, k, "embark"));
-            if !embark || !owned_or_peace || !can_embark(g, t, p)? {
+            if !embark || !owned_or_peace || !reads.embark(g, t, p)? {
                 return Ok(false);
             }
         }
@@ -186,14 +197,18 @@ fn router_path(
     allowed: u32,
     max_cost: i32,
     a: &mut Arrays,
+    reads: &mut Reads,
 ) -> Result<bool, String> {
     let Arrays {
         open,
         costs,
         came_from,
         path,
+        route,
         ..
     } = a;
+    reads.tile(start);
+    reads.tile(dest);
     path.clear();
     path.push(dest);
     if start == dest {
@@ -205,7 +220,7 @@ fn router_path(
         .is_some_and(|m| m.kind == CITY)
         && g.tiles[dest].owner != 0
     {
-        let r = relation_state(g, p, g.tiles[dest].owner)?;
+        let r = reads.relation(g, p, g.tiles[dest].owner)?;
         if r == PEACE || r == COOL_DOWN {
             return Ok(false);
         }
@@ -246,12 +261,12 @@ fn router_path(
                     }) else {
                         continue;
                     };
-                    if !accessible(g, t, p, allowed, current, next)? {
+                    if !accessible(g, t, p, allowed, current, next, reads)? {
                         continue;
                     }
                     let n = &g.tiles[next];
                     let step = if n.has_road
-                        || n.has_route
+                        || route[next]
                         || n.improvement
                             .as_ref()
                             .is_some_and(|m| m.kind == CITY || m.kind == BRIDGE)
@@ -281,6 +296,7 @@ fn router_path(
     Ok(false)
 }
 
+#[allow(clippy::too_many_arguments)] // the rule's inputs, and what the pass keeps
 fn find_path_between(
     g: &mut Game,
     t: &Tables,
@@ -289,6 +305,7 @@ fn find_path_between(
     dest: usize,
     moves: u32,
     arrays: &mut Arrays,
+    kept: &mut RouteSearches,
 ) -> Result<(), String> {
     let ok = g.tiles[origin].improvement.as_ref().unwrap().kind;
     let dk = g.tiles[dest].improvement.as_ref().unwrap().kind;
@@ -307,26 +324,365 @@ fn find_path_between(
     if allowed == 0 {
         return Ok(());
     }
-    if router_path(g, t, p, origin, dest, allowed, o.range, arrays)? {
-        for &i in &arrays.path {
-            g.tiles[i].has_route = true;
+    let range = o.range;
+    let n = g.tiles.len();
+    let w = n.div_ceil(64);
+    if let Some(mut e) = kept.take(p, origin, dest) {
+        if e.still_holds(&kept.words, w, g, t, p, allowed, &arrays.route_bits)? {
+            kept.reused += 1;
+            let path = e.path(&kept.words, w);
+            if crate::shadow::on() {
+                // the full search must find the same path and insert no relation record
+                let records = g.player(p).map(|x| x.relations);
+                let mut scratch = Reads::default();
+                scratch.clear(n);
+                let found =
+                    router_path(g, t, p, origin, dest, allowed, range, arrays, &mut scratch)?;
+                let same = match path {
+                    Some(kept) => {
+                        found
+                            && kept
+                                .iter()
+                                .map(|&i| i as usize)
+                                .eq(arrays.path.iter().copied())
+                    }
+                    None => !found,
+                };
+                if !same || g.player(p).map(|x| x.relations) != records {
+                    return Err(crate::shadow::differs("routes", "kept search"));
+                }
+            }
+            for &i in path.unwrap_or_default() {
+                mark_route(arrays, i as usize);
+            }
+            // into this update's words
+            let at = kept.words.len() - kept.words_last;
+            kept.words
+                .extend_from_within(e.at..e.at + 2 * w + e.path_len);
+            e.at = at;
+            kept.searches.push(Some(e));
+            return Ok(());
         }
     }
+    kept.searched += 1;
+    let mut reads = std::mem::take(&mut kept.scratch);
+    reads.clear(n);
+    // the route marks found so far, before the search adds its own
+    let from = kept.words.len();
+    kept.words.extend_from_slice(&arrays.route_bits);
+    let found = router_path(g, t, p, origin, dest, allowed, range, arrays, &mut reads);
+    let found = match found {
+        Ok(found) => found,
+        Err(e) => {
+            kept.scratch = reads;
+            return Err(e);
+        }
+    };
+    for (seen, m) in kept.words[from..from + w].iter_mut().zip(&reads.tiles) {
+        *seen &= m;
+    }
+    kept.words.extend_from_slice(&reads.tiles);
+    let mut path_len = 0;
+    if found {
+        path_len = arrays.path.len();
+        kept.words.extend(arrays.path.iter().map(|&i| i as u64));
+        for k in 0..path_len {
+            let i = arrays.path[k];
+            mark_route(arrays, i);
+        }
+    }
+    // a search that read more relations than a kept one holds (only with more players than
+    // `keeps` allows, when nothing is kept anyway) is never reused
+    let fits = reads.relations.len() <= MAX_RELATIONS;
+    let count = reads.relations.len().min(MAX_RELATIONS);
+    let mut relations = [(0, 0); MAX_RELATIONS];
+    relations[..count].copy_from_slice(&reads.relations[..count]);
+    kept.searches.push(Some(RouteSearch {
+        player: p,
+        origin,
+        dest,
+        allowed,
+        valid: fits,
+        at: from - kept.words_last,
+        path_len,
+        relations,
+        relation_count: count as u8,
+        embark: reads.embark,
+        found,
+    }));
+    kept.scratch = reads;
     Ok(())
+}
+
+fn mark_route(a: &mut Arrays, i: usize) {
+    a.route[i] = true;
+    a.route_bits[i / 64] |= 1 << (i % 64);
+}
+
+/// What one route search read: the tiles, the relation states in the order first looked up
+/// (through the inserting lookup), and whether the player can embark, if asked.
+#[derive(Clone, Default)]
+struct Reads {
+    tiles: Vec<u64>,
+    relations: Vec<(i32, i32)>,
+    embark: Option<bool>,
+}
+
+impl Reads {
+    /// nothing read yet, on a board of `n` tiles (in the buffers it has)
+    fn clear(&mut self, n: usize) {
+        self.tiles.clear();
+        self.tiles.resize(n.div_ceil(64), 0);
+        self.relations.clear();
+        self.relations.reserve(MAX_RELATIONS);
+        self.embark = None;
+    }
+    fn tile(&mut self, i: usize) {
+        self.tiles[i / 64] |= 1 << (i % 64);
+    }
+    fn relation(&mut self, g: &mut Game, p: i32, owner: i32) -> Result<i32, String> {
+        let r = relation_state(g, p, owner)?;
+        if !self.relations.iter().any(|&(o, _)| o == owner) {
+            self.relations.push((owner, r));
+        }
+        Ok(r)
+    }
+    fn embark(&mut self, g: &mut Game, t: &Tables, p: i32) -> Result<bool, String> {
+        let e = can_embark(g, t, p)?;
+        self.embark = Some(e);
+        Ok(e)
+    }
+}
+
+/// The most relation records a kept search holds: one per other owner, and the searches are
+/// kept only with at most seven players (`keeps`).
+const MAX_RELATIONS: usize = 8;
+
+/// One kept route search (see `RouteSearches`). Its tiles read, the route marks it saw and
+/// its path are in the update's word buffer from `at`: `route_seen` (the route marks found
+/// earlier in the same update, on the tiles read), then `reads` (each `w` words), then the
+/// path (`path_len` tile indices, destination first).
+#[derive(Clone, Copy)]
+struct RouteSearch {
+    player: i32,
+    origin: usize,
+    dest: usize,
+    allowed: u32,
+    /// cleared when a tile it read changes key
+    valid: bool,
+    at: usize,
+    path_len: usize,
+    relations: [(i32, i32); MAX_RELATIONS],
+    relation_count: u8,
+    embark: Option<bool>,
+    found: bool,
+}
+
+impl RouteSearch {
+    fn route_seen<'a>(&self, words: &'a [u64], w: usize) -> &'a [u64] {
+        &words[self.at..self.at + w]
+    }
+    fn reads<'a>(&self, words: &'a [u64], w: usize) -> &'a [u64] {
+        &words[self.at + w..self.at + 2 * w]
+    }
+    fn path<'a>(&self, words: &'a [u64], w: usize) -> Option<&'a [u64]> {
+        let from = self.at + 2 * w;
+        self.found.then_some(&words[from..from + self.path_len])
+    }
+
+    /// Whether the search would read the same now. The relation records it read must all
+    /// exist (a missing one would be inserted by the search, in its order), so reusing
+    /// writes nothing; asking whether the player can embark refreshes a tech cache the
+    /// update has just refreshed.
+    #[allow(clippy::too_many_arguments)] // the search's inputs, as find_path_between has them
+    fn still_holds(
+        &self,
+        words: &[u64],
+        w: usize,
+        g: &mut Game,
+        t: &Tables,
+        p: i32,
+        allowed: u32,
+        route: &[u64],
+    ) -> Result<bool, String> {
+        if !self.valid || self.allowed != allowed {
+            return Ok(false);
+        }
+        let routes_same = route
+            .iter()
+            .zip(self.reads(words, w))
+            .zip(self.route_seen(words, w))
+            .all(|((r, m), seen)| r & m == *seen);
+        if !routes_same {
+            return Ok(false);
+        }
+        let me = g.player(p).ok_or("missing player")?;
+        if !self.relations[..self.relation_count as usize]
+            .iter()
+            .all(|&(o, state)| me.relation(o).is_some_and(|r| r.state == state))
+        {
+            return Ok(false);
+        }
+        if let Some(e) = self.embark {
+            if can_embark(g, t, p)? != e {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// What a route search reads of a tile.
+#[derive(Clone, Copy, PartialEq)]
+struct RouteKey {
+    owner: i32,
+    improvement: i32,
+    terrain: i32,
+    wetland: bool,
+    road: bool,
+    /// the players (by index) that explored it
+    explorers: u8,
+}
+
+fn route_key(g: &Game, ids: &[i32], i: usize) -> RouteKey {
+    let x = &g.tiles[i];
+    let mut explorers = 0u8;
+    for (k, id) in ids.iter().enumerate().take(8) {
+        if x.explorers.contains(id) {
+            explorers |= 1 << k;
+        }
+    }
+    RouteKey {
+        owner: x.owner,
+        improvement: x.improvement.as_ref().map_or(-1, |m| m.kind),
+        terrain: x.terrain,
+        wetland: crate::aquarion::wetland(x),
+        road: x.has_road,
+        explorers,
+    }
+}
+
+/// The route update's searches, one per (player, origin, destination) searched last time,
+/// in the order searched. A search is reused when nothing it read changed: the keys of the
+/// tiles it read (field stamps, then a key compare), the route marks found before it in the
+/// same update on those tiles, the relation states it looked up, whether the player can
+/// embark (if it asked), and its terrain mask.
+///
+/// During an update `searches` holds last update's searches (`last` of them, taken as this
+/// one reaches them) and then this update's, and `words` their words in the same order; the
+/// end of the update drops last update's part of both. So nothing here allocates once the two
+/// have grown to what any update needed.
+#[derive(Clone, Default)]
+pub(crate) struct RouteSearches {
+    clock: u64,
+    keys: Vec<RouteKey>,
+    ids: Vec<i32>,
+    searches: Vec<Option<RouteSearch>>,
+    last: usize,
+    cursor: usize,
+    /// the searches' words (see `RouteSearch`): last update's `words_last`, then this one's
+    words: Vec<u64>,
+    words_last: usize,
+    /// what the search being made read, in buffers kept between searches
+    scratch: Reads,
+    reused: u64,
+    searched: u64,
+}
+
+impl RouteSearches {
+    /// bring the keys up to the board's clock; start this update's list
+    fn begin(&mut self, g: &Game) -> Result<(), String> {
+        let n = g.tiles.len();
+        let w = n.div_ceil(64);
+        // what the last update made becomes last update's part
+        (self.last, self.words_last) = (self.searches.len(), self.words.len());
+        let same_ids = g
+            .players
+            .iter()
+            .map(|p| p.action.id)
+            .eq(self.ids.iter().copied());
+        if self.keys.len() != n || !same_ids {
+            self.ids.clear();
+            self.ids.extend(g.players.iter().map(|p| p.action.id));
+            self.keys = (0..n).map(|i| route_key(g, &self.ids, i)).collect();
+            self.searches.clear();
+            self.words.clear();
+            (self.last, self.words_last) = (0, 0);
+        } else {
+            for i in 0..n {
+                if g.tiles.fields_stamp(i) <= self.clock {
+                    continue;
+                }
+                let k = route_key(g, &self.ids, i);
+                if k != self.keys[i] {
+                    self.keys[i] = k;
+                    for s in self.searches.iter_mut().flatten() {
+                        s.valid &= !bit(s.reads(&self.words, w), i);
+                    }
+                }
+            }
+        }
+        self.clock = g.tiles.clock();
+        self.cursor = 0;
+        if crate::shadow::on() && (0..n).any(|i| route_key(g, &self.ids, i) != self.keys[i]) {
+            return Err(crate::shadow::differs("routes", "unmarked key change"));
+        }
+        Ok(())
+    }
+
+    /// last update's search of this pair, if any
+    fn take(&mut self, p: i32, origin: usize, dest: usize) -> Option<RouteSearch> {
+        let is = |s: &Option<RouteSearch>| {
+            s.as_ref()
+                .is_some_and(|s| s.player == p && s.origin == origin && s.dest == dest)
+        };
+        let last = &mut self.searches[..self.last];
+        let k = if last.get(self.cursor).is_some_and(is) {
+            self.cursor
+        } else {
+            last.iter().position(is)?
+        };
+        self.cursor = k + 1;
+        last[k].take()
+    }
 }
 
 /// UpdateRoutes over every non-Nature player
 pub fn update_routes(g: &mut Game, t: &Tables) -> Result<(), String> {
     let mut a = ARRAYS.take();
-    let mut old = std::mem::take(&mut a.routed);
-    old.clear();
-    for (i, x) in g.tiles.iter_mut().enumerate() {
-        if x.has_route {
-            x.has_route = false;
-            x.had_route = true;
-            old.push(i);
+    let done = if keeps(g) {
+        let mut kept = g.tiles.take_kept();
+        let done = update_routes_with(g, t, &mut a, &mut kept.routes);
+        if done.is_err() {
+            // an update cut short leaves the two parts mixed: keep nothing but the counts
+            let r = &kept.routes;
+            let (reused, searched) = (r.reused, r.searched);
+            kept.routes = RouteSearches {
+                reused,
+                searched,
+                ..Default::default()
+            };
         }
-    }
+        g.tiles.put_kept(kept);
+        done
+    } else {
+        // nothing kept: every search runs in full
+        update_routes_with(g, t, &mut a, &mut RouteSearches::default())
+    };
+    ARRAYS.set(a);
+    done
+}
+
+fn update_routes_with(
+    g: &mut Game,
+    t: &Tables,
+    a: &mut Arrays,
+    kept: &mut RouteSearches,
+) -> Result<(), String> {
+    kept.begin(g)?;
+    // every route goes, and the search finds them again (reading what it has found so far)
+    reset(&mut a.route, g.tiles.len(), false);
+    reset(&mut a.route_bits, g.tiles.len().div_ceil(64), 0);
     let (mut routers, mut cities) = (
         std::mem::take(&mut a.routers),
         std::mem::take(&mut a.cities),
@@ -352,20 +708,37 @@ pub fn update_routes(g: &mut Game, t: &Tables) -> Result<(), String> {
                 continue;
             };
             for &dest in &routers[n + 1..] {
-                find_path_between(g, t, p, origin, dest, moves, &mut a)?;
+                find_path_between(g, t, p, origin, dest, moves, a, kept)?;
             }
             if r.connects_cities {
                 for &dest in &cities {
-                    find_path_between(g, t, p, origin, dest, moves, &mut a)?;
+                    find_path_between(g, t, p, origin, dest, moves, a, kept)?;
                 }
             }
         }
     }
-    for &i in &old {
-        g.tiles[i].had_route = false;
+    // the game sets HadRoute on a tile that loses its route mark and clears it again at
+    // the end: a tile that had a route ends without HadRoute and with the route found; only
+    // a tile whose flags change is written
+    for i in 0..g.tiles.len() {
+        let (had, found) = (g.tiles[i].has_route, a.route[i]);
+        if had != found || had && g.tiles[i].had_route {
+            let x = g.tile_mut(i);
+            x.has_route = found;
+            if had {
+                x.had_route = false;
+            }
+        }
     }
-    (a.routers, a.cities, a.routed) = (routers, cities, old);
-    ARRAYS.set(a);
+    (a.routers, a.cities) = (routers, cities);
+    // the searches not reached this time are not needed again
+    kept.searches.drain(..kept.last);
+    kept.words.drain(..kept.words_last);
+    (kept.last, kept.words_last) = (0, 0);
+    // the next update holds these and its own at once: room for both, so that only an update
+    // that keeps more than this one allocates
+    kept.searches.reserve(kept.searches.len());
+    kept.words.reserve(kept.words.len());
     Ok(())
 }
 
@@ -457,10 +830,12 @@ struct Arrays {
     costs: Vec<i32>,
     came_from: Vec<usize>,
     path: Vec<usize>,
-    // the route update: one player's routers and cities, and the tiles that had a route
+    // the route update: one player's routers and cities, and the routes found so far (the
+    // search reads them; the tiles are written once at the end)
     routers: Vec<usize>,
     cities: Vec<usize>,
-    routed: Vec<usize>,
+    route: Vec<bool>,
+    route_bits: Vec<u64>,
 }
 
 thread_local! {
@@ -497,7 +872,8 @@ fn visited_from(
     const UNREACHED: u16 = u16::MAX;
     // breadth-first distance from the start, and each reached tile's open neighbours
     reset(&mut a.distance, tiles, UNREACHED);
-    reset(&mut a.lists, tiles, ([0; 8], 0));
+    // only its length matters: every reached tile's list is written before it is read
+    a.lists.resize(tiles, ([0; 8], 0));
     a.order.clear();
     a.order.push(start);
     a.distance[start] = 0;
@@ -667,6 +1043,265 @@ fn connected(g: &Game, t: &Tables, p: i32, a: &mut Arrays) -> Result<Option<usiz
     done.map(|()| Some(start))
 }
 
+/// What the step's incremental passes keep between calls, inside the board (`board::Tiles`)
+/// so that it travels with the stamps it is read against. It assumes one catalog (`Tables`) for the board's whole life, as every
+/// caller has; a game stepped with another catalog must `Tiles::forget_kept` first.
+#[derive(Clone, Default)]
+pub struct Kept {
+    connections: Connections,
+    routes: RouteSearches,
+}
+
+impl Kept {
+    /// (searches reused, searches run) by the connected-cities pass
+    pub fn connection_counts(&self) -> (u64, u64) {
+        (self.connections.reused, self.connections.searched)
+    }
+    /// (searches reused, searches run) by the route update
+    pub fn route_counts(&self) -> (u64, u64) {
+        (self.routes.reused, self.routes.searched)
+    }
+    /// (kept connection searches, kept route searches) now
+    pub fn searches(&self) -> (usize, usize) {
+        let valid = self.connections.searches.iter().filter(|s| s.valid).count();
+        (valid, self.routes.searches.len())
+    }
+    /// the bytes it holds: its own size and its arrays' capacities
+    pub fn bytes(&self) -> usize {
+        use std::mem::size_of;
+        fn vec<T>(v: &Vec<T>) -> usize {
+            v.capacity() * size_of::<T>()
+        }
+        let c = &self.connections;
+        let r = &self.routes;
+        let search = |s: &Search| vec(&s.region) + vec(&s.visited);
+        size_of::<Kept>()
+            + vec(&c.keys)
+            + vec(&c.ids)
+            + vec(&c.searches)
+            + c.searches.iter().map(search).sum::<usize>()
+            + vec(&r.keys)
+            + vec(&r.ids)
+            + vec(&r.searches)
+            + vec(&r.words)
+            + vec(&r.scratch.tiles)
+            + vec(&r.scratch.relations)
+    }
+}
+
+/// The connected-cities searches kept per player. A search reads, of each tile it reaches and
+/// of their neighbours, only the tile's `key` (owner, whether it is connectable, route mark),
+/// the player's start tile, and the peace relation of each pair of owners it looked across
+/// (from a reached tile to a neighbour of another owner). It is reused while none of those
+/// changed.
+#[derive(Clone, Default)]
+struct Connections {
+    /// the board clock up to which `keys` are current
+    clock: u64,
+    keys: Vec<u32>,
+    /// the player ids in order, and the peace relation of every ordered pair of them
+    ids: Vec<i32>,
+    peace: u64,
+    searches: Vec<Search>,
+    reused: u64,
+    searched: u64,
+}
+
+#[derive(Clone)]
+struct Search {
+    player: i32,
+    start: usize,
+    /// cleared when a tile of `region` changes key, or the peace of a pair in `pairs`
+    valid: bool,
+    /// the ordered pairs of player indices whose peace the search read, as bits of `peace`
+    pairs: u64,
+    /// the tiles the search reached and their neighbours: everything it read
+    region: Vec<u64>,
+    visited: Vec<u64>,
+}
+
+/// The kept searches index pairs of players in one 64-bit word; a game with more players
+/// (out of scope: two to four seats and Nature) keeps nothing and runs every search in full.
+fn keeps(g: &Game) -> bool {
+    g.players.len() <= 7
+}
+
+fn bit(set: &[u64], i: usize) -> bool {
+    set[i / 64] >> (i % 64) & 1 == 1
+}
+
+/// what the connected-cities search reads of tile `i`
+fn connection_key(g: &Game, t: &Tables, i: usize) -> Result<u32, String> {
+    let x = &g.tiles[i];
+    Ok((x.owner as u32) << 2 | u32::from(connectable(g, t, i)?) << 1 | u32::from(x.has_route))
+}
+
+/// the peace relations between the players (in `g.players` order), as `owners_allow` reads
+/// them
+fn peace(g: &Game) -> u64 {
+    let n = g.players.len();
+    let mut mask = 0u64;
+    for (k, a) in g.players.iter().enumerate() {
+        for (m, b) in g.players.iter().enumerate() {
+            if crate::menu::relation(g, a.action.id, b.action.id) == PEACE {
+                mask |= 1 << (k * n + m);
+            }
+        }
+    }
+    mask
+}
+
+impl Connections {
+    /// bring the keys up to the board's clock, dropping every search that read a tile whose
+    /// key changed or the peace of a pair whose peace changed, and every search if the players
+    /// changed
+    fn refresh(&mut self, g: &Game, t: &Tables) -> Result<(), String> {
+        let n = g.tiles.len();
+        if self.keys.len() != n {
+            self.keys = (0..n)
+                .map(|i| connection_key(g, t, i))
+                .collect::<Result<_, _>>()?;
+            self.searches.clear();
+        } else {
+            for i in 0..n {
+                if g.tiles.fields_stamp(i) <= self.clock {
+                    continue;
+                }
+                let k = connection_key(g, t, i)?;
+                if k != self.keys[i] {
+                    self.keys[i] = k;
+                    // an invalid slot may have no region yet (a player without a capital)
+                    for s in self.searches.iter_mut().filter(|s| s.valid) {
+                        s.valid = !bit(&s.region, i);
+                    }
+                }
+            }
+        }
+        self.clock = g.tiles.clock();
+        let mask = peace(g);
+        if !g
+            .players
+            .iter()
+            .map(|p| p.action.id)
+            .eq(self.ids.iter().copied())
+        {
+            self.ids.clear();
+            self.ids.extend(g.players.iter().map(|p| p.action.id));
+            self.searches.clear();
+        } else {
+            for s in &mut self.searches {
+                s.valid &= s.pairs & (mask ^ self.peace) == 0;
+            }
+        }
+        self.peace = mask;
+        Ok(())
+    }
+}
+
+/// `connected`, reusing the player's last search when nothing it read has changed
+fn connected_kept(
+    g: &Game,
+    t: &Tables,
+    p: i32,
+    a: &mut Arrays,
+    kept: &mut Connections,
+) -> Result<Option<usize>, String> {
+    // no capital to search from (`connected` answers that at once), or too many players
+    if p == 255 || g.player(p).is_none() || !keeps(g) {
+        return connected(g, t, p, a);
+    }
+    kept.refresh(g, t)?;
+    let start = g.index(start_tile(g, p)?).ok_or("start tile")?;
+    let n = g.tiles.len();
+    let slot = kept.searches.iter().position(|s| s.player == p);
+    if let Some(k) = slot.filter(|&k| kept.searches[k].valid && kept.searches[k].start == start) {
+        kept.reused += 1;
+        let visited = &kept.searches[k].visited;
+        if crate::shadow::on() {
+            if kept
+                .keys
+                .iter()
+                .enumerate()
+                .any(|(i, &k)| connection_key(g, t, i).is_ok_and(|now| now != k))
+            {
+                return Err(crate::shadow::differs(
+                    "city connections",
+                    "unmarked key change",
+                ));
+            }
+            let full = connected(g, t, p, a)?;
+            if full != Some(start) || (0..n).any(|i| a.visited[i] != bit(visited, i)) {
+                return Err(crate::shadow::differs("city connections", "kept search"));
+            }
+        }
+        reset(&mut a.visited, n, false);
+        for (i, v) in a.visited.iter_mut().enumerate() {
+            *v = bit(visited, i);
+        }
+        return Ok(Some(start));
+    }
+    kept.searched += 1;
+    let found = connected(g, t, p, a)?;
+    // the player's slot, kept invalid until a search can be kept in it, so that a redone
+    // search reuses its buffers
+    let k = slot.unwrap_or_else(|| {
+        kept.searches.push(Search {
+            player: p,
+            start,
+            valid: false,
+            pairs: 0,
+            region: Vec::new(),
+            visited: Vec::new(),
+        });
+        kept.searches.len() - 1
+    });
+    kept.searches[k].valid = false;
+    if found.is_some() {
+        // the reached tiles and their neighbours, and the owner pairs `owners_allow` read
+        let mut region = std::mem::take(&mut kept.searches[k].region);
+        region.clear();
+        region.resize(n.div_ceil(64), 0);
+        let mut pairs = Some(0u64);
+        let index = |owner: i32| kept.ids.iter().position(|&id| id == owner);
+        for i in (0..n).filter(|&i| a.distance[i] != u16::MAX) {
+            let c = g.tiles[i].coordinates;
+            let from = g.tiles[i].owner;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let Some(m) = g.index(Xy {
+                        x: c.x + dx,
+                        y: c.y + dy,
+                    }) else {
+                        continue;
+                    };
+                    region[m / 64] |= 1 << (m % 64);
+                    let to = g.tiles[m].owner;
+                    if to == 0 || to == from || g.player(from).is_none() {
+                        continue;
+                    }
+                    // an owner that is not a listed player has no bit: such a search is not kept
+                    pairs = match (pairs, index(from), index(to)) {
+                        (Some(b), Some(f), Some(o)) => Some(b | 1 << (f * kept.ids.len() + o)),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        let s = &mut kept.searches[k];
+        s.region = region;
+        let Some(pairs) = pairs else {
+            return Ok(found);
+        };
+        s.visited.clear();
+        s.visited.resize(n.div_ceil(64), 0);
+        for i in (0..n).filter(|&i| a.visited[i]) {
+            s.visited[i / 64] |= 1 << (i % 64);
+        }
+        (s.start, s.pairs, s.valid) = (start, pairs, true);
+    }
+    Ok(found)
+}
+
 /// UpdateCityConnections: queue Connect/Change/Disconnect for each listed player's cities
 pub fn update_city_connections(
     g: &mut Game,
@@ -680,7 +1315,10 @@ pub fn update_city_connections(
         }
         player_index(g, p)?;
         let mut a = ARRAYS.take();
-        let start = connected(g, t, p, &mut a)?;
+        let mut kept = g.tiles.take_kept();
+        let start = connected_kept(g, t, p, &mut a, &mut kept.connections);
+        g.tiles.put_kept(kept);
+        let start = start?;
         // the capital itself is not one of its connected cities
         let reached = |i: usize| start.is_some_and(|s| s != i && a.visited[i]);
         for (i, x) in g.tiles.iter().enumerate().filter(|(_, x)| x.owner == p) {
@@ -786,7 +1424,7 @@ pub fn city_connection(
             }
             out.push(pop(p, start, start));
             out.push(pop(p, c, c));
-            g.tiles[i]
+            g.tile_mut(i)
                 .improvement
                 .as_mut()
                 .unwrap()
@@ -798,7 +1436,7 @@ pub fn city_connection(
             let old = start_tile(g, to)?;
             out.push(pop(p, start, start));
             out.push(depop(p, old));
-            g.tiles[i]
+            g.tile_mut(i)
                 .improvement
                 .as_mut()
                 .unwrap()
@@ -809,7 +1447,7 @@ pub fn city_connection(
             let old = start_tile(g, to)?;
             out.push(depop(p, old));
             out.push(depop(p, c));
-            g.tiles[i]
+            g.tile_mut(i)
                 .improvement
                 .as_mut()
                 .unwrap()
@@ -822,6 +1460,40 @@ pub fn city_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A player that has lost its capital gets a connected-cities slot with no region yet; a
+    /// tile changing key after that must not read the empty region.
+    #[test]
+    fn a_player_without_a_capital_survives_a_key_change() {
+        const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+        let t = Tables::compile(CATALOG).unwrap();
+        let config = crate::reset::Config {
+            rules: 124,
+            seed: 3,
+            size: 11,
+            map: 2,
+            mode: 4,
+            tribes: vec![7, 7],
+            action_limit: 10,
+        };
+        let mut g = crate::reset::reset(&config, CATALOG, &t).unwrap();
+        let ids: Vec<i32> = g
+            .players
+            .iter()
+            .map(|p| p.action.id)
+            .filter(|&p| p != 255)
+            .collect();
+        let (p, other) = (ids[0], ids[1]);
+        let start = g.index(start_tile(&g, p).unwrap()).unwrap();
+        g.tile_mut(start).owner = other;
+        let (mut a, mut kept) = (Arrays::default(), Connections::default());
+        assert_eq!(connected_kept(&g, &t, p, &mut a, &mut kept).unwrap(), None);
+        let far = (0..g.tiles.len())
+            .find(|&i| i != start && g.tiles[i].owner == 0)
+            .unwrap();
+        g.tile_mut(far).owner = other;
+        assert_eq!(connected_kept(&g, &t, p, &mut a, &mut kept).unwrap(), None);
+    }
 
     /// The game's search as written: a queue, visited on dequeue, capped.
     fn reference(start: usize, lists: &[Open]) -> Vec<bool> {
@@ -897,12 +1569,14 @@ mod tests {
     #[test]
     fn visits_what_the_game_queue_visits() {
         let (mut shortcut, mut replayed, mut capped) = (0, 0, 0);
-        for seed in 0..600u64 {
+        // one set of arrays for every board, as one thread keeps them: what an earlier, larger
+        // board left in them must not matter
+        let mut a = Arrays::default();
+        for seed in (0..600u64).rev() {
             let side = 4 + (seed % 8) as usize;
             let density = [40, 70, 100, 140, 200, 256][(seed % 6) as usize];
             let lists = board(side, density, seed);
             let start = (seed as usize * 7) % lists.len();
-            let mut a = Arrays::default();
             visited_from(&mut a, lists.len(), start, |i| Ok(lists[i])).unwrap();
             assert_eq!(a.visited, reference(start, &lists), "seed {seed}");
             // the bound is never under the true count, and the shortcut is taken only under the cap

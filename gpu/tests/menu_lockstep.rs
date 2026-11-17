@@ -371,8 +371,8 @@ fn an_owned_lighthouse_offers_no_destroy() {
         .iter()
         .position(|x| x.improvement.as_ref().is_some_and(|m| m.kind == lighthouse))
         .expect("a lighthouse");
-    g.tiles[i].owner = id;
-    g.tiles[i].explorers.push(id);
+    g.tile_mut(i).owner = id;
+    g.tile_mut(i).explorers.push(id);
     let destroy = t.techs.id("chivalry").unwrap() as i32;
     g.players[mover].available_tech.push(destroy);
     let want: Vec<[i32; 6]> = menu::menu(&g, &t)
@@ -598,19 +598,18 @@ fn a_cloak_infiltrates_as_in_the_engine() {
                 u.health = t.units.get(cloak as usize).unwrap().health;
                 u.moved = false;
                 u.attacked = false;
-                g.units.push(u);
-                let n = (g.units.len() - 1) as u32;
+                let n = g.push_unit(u);
                 let i = g.index(spot).unwrap();
-                g.tiles[i].unit = Some(n);
+                g.set_unit_at(i, Some(n));
                 for c in [spot, city] {
                     let j = g.index(c).unwrap();
                     if !g.tiles[j].explorers.contains(&me) {
-                        g.tiles[j].explorers.push(me);
+                        g.tile_mut(j).explorers.push(me);
                     }
                 }
                 if !defended {
                     let j = g.index(city).unwrap();
-                    g.tiles[j].unit = None;
+                    g.set_unit_at(j, None);
                 }
                 let legal = menu::menu(&g, &t).unwrap();
                 let at = |c: Xy| Some(engine_fast_frame::Xy { x: c.x, y: c.y });
@@ -736,5 +735,162 @@ fn the_host_previews_and_defence_equal_the_batchs() {
     assert!(
         present > 100 && kills > 0 && back > 0,
         "{present} previews, {kills} lethal, {back} retaliated"
+    );
+}
+
+/// The port's `limited` test reads a per-list mask of the kinds built around each city (menu.h
+/// ef_limited_kinds) instead of scanning 5 x 5 tiles per offer. Random games rarely reach it, so
+/// here a limited building is placed exactly 2 from its ruling city and 2 or more from a tile
+/// offering the same kind: the port's list equals the engine's before and after, and the offer
+/// is gone after.
+#[test]
+fn a_limited_building_two_from_the_city_is_seen() {
+    use engine_fast::state::{Improvement, Xy};
+    let t = Tables::compile(CATALOG).unwrap();
+    let flat = tables::DeviceTables::new(&t).unwrap();
+    let limited = |k: i32| {
+        t.improvements
+            .get(k as usize)
+            .is_some_and(|d| d.improvement_abilities.has("limited"))
+    };
+    let far = |a: Xy, b: Xy| (a.x - b.x).abs().max((a.y - b.y).abs());
+    let farm = t.improvements.id("farm").unwrap() as i32;
+    let same = |g: &engine_fast::state::Game, at: &str| -> Vec<[i32; 6]> {
+        let mut want: Vec<[i32; 6]> = menu::menu(g, &t)
+            .unwrap()
+            .iter()
+            .map(|c| row(g.width, c))
+            .collect();
+        want.sort_by_key(sort_key);
+        let got = twin_menu(&device::to_device(g).unwrap(), &flat)
+            .unwrap_or_else(|e| panic!("{at}: the port stopped: {}", e.text));
+        assert_eq!(got, want, "{at}");
+        got
+    };
+    for seed in 1..=60 {
+        let config = Config {
+            rules: 124,
+            seed,
+            size: 11,
+            map: [2, 3, 6][seed as usize % 3],
+            mode: 4,
+            tribes: vec![7, 7],
+            action_limit: 600,
+        };
+        let mut g = engine_fast::reset::reset(&config, CATALOG, &t).unwrap();
+        let me = g.current_player_index as usize;
+        let mover = g.players[me].action.id;
+        for k in 0..t.techs.len() as i32 {
+            if t.techs.get(k as usize).is_some() && !g.players[me].available_tech.contains(&k) {
+                let _ = g.players[me].available_tech.try_push(k);
+            }
+        }
+        g.players[me].action.currency = 1_000;
+        let Some((capital, city)) = g
+            .tiles
+            .iter()
+            .find(|x| x.owner == mover && x.improvement.is_some_and(|m| m.kind == 1))
+            .map(|x| (x.coordinates, x.improvement.unwrap()))
+        else {
+            continue;
+        };
+        // the capital's border grown to 2, farms on the ring next to it: windmills (limited,
+        // next to a farm) can go on the outer ring
+        for x in g.tiles_mut().iter_mut() {
+            if !x.explorers.contains(&mover) {
+                let _ = x.explorers.try_push(mover);
+            }
+            let d = far(x.coordinates, capital);
+            if d <= 2 {
+                x.owner = mover;
+                x.ruling_city = capital;
+            }
+            if d == 1 || d == 2 {
+                x.terrain = 3;
+                x.resource = None;
+                x.effects.clear();
+                x.unit = None;
+                x.has_road = false;
+                x.improvement = (d == 1).then_some(Improvement {
+                    kind: farm,
+                    level: 0,
+                    ..city
+                });
+            }
+        }
+        let Ok(full) = menu::menu(&g, &t) else {
+            continue;
+        };
+        let builds: Vec<(Xy, i32)> = full
+            .iter()
+            .filter(|c| c.action.kind == 1 && c.action.option.is_some_and(limited))
+            .map(|c| {
+                let at = c.action.target.unwrap();
+                (Xy { x: at.x, y: at.y }, c.action.option.unwrap())
+            })
+            .collect();
+        for &(i, kind) in &builds {
+            let city_at = g.tile(i).unwrap().ruling_city;
+            let other = builds.iter().find(|&&(j, k)| {
+                k == kind
+                    && far(i, j) >= 2
+                    && far(j, city_at) == 2
+                    && g.tile(j).unwrap().ruling_city == city_at
+            });
+            let Some(&(j, _)) = other else { continue };
+            same(&g, &format!("seed {seed}, before"));
+            let mut built = g.clone();
+            let at = built.index(j).unwrap();
+            let template = built.tile(city_at).and_then(|x| x.improvement).unwrap();
+            built.tile_mut(at).improvement = Some(Improvement {
+                kind,
+                owner: mover,
+                founder: mover,
+                level: 0,
+                ..template
+            });
+            let after = same(&built, &format!("seed {seed}, after"));
+            let target = built.index(i).unwrap() as i32;
+            assert!(
+                !after
+                    .iter()
+                    .any(|r| r[0] == 1 && r[2] == target && r[3] == kind),
+                "the case does not exercise the rule"
+            );
+            return;
+        }
+    }
+    panic!("no position with two limited offers ruled by one city");
+}
+
+/// A tile's explorers are kept twice on the device, as the list and as bits
+/// (kernel/query.h ef_explorer_bit, read by every "explored" test): to_device sets the bits,
+/// and the block check refuses a block where they disagree with the list.
+#[test]
+fn a_stale_explorer_mask_is_refused() {
+    let t = Tables::compile(CATALOG).unwrap();
+    let flat = tables::DeviceTables::new(&t).unwrap();
+    let config = Config {
+        rules: 124,
+        seed: 7,
+        size: 11,
+        map: 2,
+        mode: 4,
+        tribes: vec![7, 2],
+        action_limit: 100,
+    };
+    let g = engine_fast::reset::reset(&config, CATALOG, &t).unwrap();
+    let mut block = device::to_device(&g).unwrap();
+    let i = block
+        .tiles()
+        .iter()
+        .position(|x| x.explorers_len_n > 0)
+        .expect("an explored tile");
+    assert_ne!(block.tiles()[i].explorers_mask_n, 0);
+    assert!(twin_menu(&block, &flat).is_ok());
+    block.tiles_mut()[i].explorers_mask_n = 0;
+    assert!(
+        twin_menu(&block, &flat).is_err(),
+        "a stale mask was accepted"
     );
 }

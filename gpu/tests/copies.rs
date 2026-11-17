@@ -1,7 +1,7 @@
 //! The device loop's copy guard is structural: every copy between the host and a batch's
-//! device memory goes through `ef_copy` in kernel/device.cu, which counts the bytes
-//! (tests/device_loop.rs checks the counts per step). This scan fails on a `cudaMemcpy`
-//! anywhere else in a function that takes a batch (`EfDevice *d`).
+//! device memory goes through `ef_copy` or `ef_copy_async` in kernel/device.cu, which count
+//! the bytes (tests/device_loop.rs checks the counts per step). This scan fails on a
+//! `cudaMemcpy` anywhere else in a function that takes a batch (`EfDevice *d`).
 
 /// Whether the line calls any cudaMemcpy function (cudaMemcpy, cudaMemcpyAsync, cudaMemcpy2D,
 /// ...), as opposed to naming a copy kind such as cudaMemcpyHostToDevice.
@@ -40,7 +40,7 @@ fn every_batch_copy_is_counted() {
             function = Some((name.to_owned(), line.contains("EfDevice *d")));
         }
         if let Some((name, takes_batch)) = &function {
-            if *takes_batch && name != "ef_copy" && calls_memcpy(line) {
+            if *takes_batch && name != "ef_copy" && name != "ef_copy_async" && calls_memcpy(line) {
                 bad.push(format!("line {}: {} in {name}", n + 1, line.trim()));
             }
         }
@@ -48,6 +48,7 @@ fn every_batch_copy_is_counted() {
     assert!(bad.is_empty(), "uncounted copies of a batch: {bad:#?}");
     // the scan sees the functions it is about
     assert!(src.contains("static cudaError_t ef_copy(EfDevice *d,"));
+    assert!(src.contains("static cudaError_t ef_copy_async(EfDevice *d,"));
     assert!(src.matches("ef_copy(d, ").count() >= 10);
 }
 

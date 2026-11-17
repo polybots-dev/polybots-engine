@@ -137,6 +137,57 @@ fn bits(ids: impl Iterator<Item = i64>) -> Result<i16, String> {
 
 /// Write `viewer`'s view of `g` into `out` (buffers are reused).
 pub fn write(g: &Game, t: &Tables, viewer: i32, out: &mut View) -> Result<(), String> {
+    write_with(g, t, viewer, out, None)
+}
+
+/// What `write_kept` last wrote into a view: the board (its array id and write clock) and
+/// what every tile's planes read beyond the tile itself and its unit. While those are the
+/// same, only the tiles stamped since are redone.
+#[derive(Clone, Debug, Default)]
+pub struct Kept {
+    board: u64,
+    clock: u64,
+    viewer: i32,
+    revealed: u32,
+    rainbow: bool,
+    /// per player, whether the viewer is at peace with it (an invisible unit shows then)
+    peace: Vec<(i32, bool)>,
+}
+
+impl Kept {
+    /// the bytes it holds
+    pub fn bytes(&self) -> usize {
+        std::mem::size_of::<Kept>() + self.peace.capacity() * std::mem::size_of::<(i32, bool)>()
+    }
+}
+
+/// `write`, redoing only the tiles changed since the last call with the same `kept`. `out`
+/// must be the view that call wrote, unchanged since.
+pub fn write_kept(
+    g: &Game,
+    t: &Tables,
+    viewer: i32,
+    out: &mut View,
+    kept: &mut Kept,
+) -> Result<(), String> {
+    write_with(g, t, viewer, out, Some(kept))?;
+    if crate::shadow::on() {
+        let mut full = View::default();
+        write(g, t, viewer, &mut full)?;
+        if full != *out {
+            return Err(crate::shadow::differs("view", "kept tiles"));
+        }
+    }
+    Ok(())
+}
+
+fn write_with(
+    g: &Game,
+    t: &Tables,
+    viewer: i32,
+    out: &mut View,
+    kept: Option<&mut Kept>,
+) -> Result<(), String> {
     let me = g.player(viewer).ok_or("view for a missing player")?;
     let n = g.tiles.len();
     let width = g.width as usize;
@@ -148,8 +199,6 @@ pub fn write(g: &Game, t: &Tables, viewer: i32, out: &mut View) -> Result<(), St
     out.mode =
         i16::try_from(g.fixed.rules_mode).map_err(|_| "rules mode is not a small integer")?;
     out.stars = me.action.currency;
-    out.tiles.clear();
-    out.tiles.resize(TILE_PLANES.len() * n, UNKNOWN);
     // which resource kinds the viewer's tech shows, asked once
     let revealed = crate::infiltrate::revealed_kinds(g, t, viewer)?;
     let rainbow = t
@@ -157,84 +206,59 @@ pub fn write(g: &Game, t: &Tables, viewer: i32, out: &mut View) -> Result<(), St
         .get(me.tribe as usize)
         .is_some_and(|d| d.tribe_abilities.has("rainbowvision"));
     let tile_index = |c: crate::state::Xy| g.index(c).map_or(UNKNOWN, |i| i as i16);
-    let mut planes: Vec<&mut [i16]> = out.tiles.chunks_mut(n).collect();
-    let [explored, terrain, climate, resource, improvement, level, owner, capital, ruling, road, route, effects, ruin_hint, unit_kind, unit_owner, unit_health, unit_veteran, unit_effects, unit_passenger, unit_moved, unit_attacked, unit_kills, unit_home, city_population, city_connected, city_progress, city_wall, city_parks, city_super_units] =
-        planes.as_mut_slice()
-    else {
-        return Err("view planes".into());
+    let peace: Vec<(i32, bool)> = g
+        .players
+        .iter()
+        .map(|p| {
+            (
+                p.action.id,
+                crate::menu::relation(g, viewer, p.action.id) == PEACE,
+            )
+        })
+        .collect();
+    let now = Kept {
+        board: g.tiles.id(),
+        clock: g.tiles.clock(),
+        viewer,
+        revealed,
+        rainbow,
+        peace,
     };
-    for (i, x) in g.tiles.iter().enumerate() {
-        if !x.explorers.contains(&viewer) {
-            explored[i] = 0;
-            ruin_hint[i] =
-                i16::from(rainbow && x.improvement.as_ref().is_some_and(|m| m.kind == RUIN));
-            continue;
-        }
-        explored[i] = 1;
-        ruin_hint[i] = 0;
-        terrain[i] = x.terrain as i16;
-        climate[i] = x.climate as i16;
-        // a resource shows on a tile without an improvement, if the viewer's tech reveals its kind
-        resource[i] = match x.resource.filter(|_| x.improvement.is_none()) {
-            Some(kind) if (0..32).contains(&kind) && revealed >> kind & 1 == 1 => kind as i16,
-            _ => 0,
-        };
-        owner[i] = x.owner as i16;
-        capital[i] = x.capital_of as i16;
-        ruling[i] = tile_index(x.ruling_city);
-        road[i] = i16::from(x.has_road);
-        route[i] = i16::from(x.has_route);
-        effects[i] = bits(x.effects.iter().map(|&e| i64::from(e)))?;
-        match &x.improvement {
-            // a kind the catalog does not know is not shown (as the game's board)
-            Some(m) if t.improvements.get(m.kind as usize).is_some() => {
-                improvement[i] = m.kind as i16;
-                level[i] = if m.kind == CITY { m.level as i16 } else { 0 };
-                if m.kind == CITY {
-                    city_parks[i] = m.rewards.count(PARK) as i16;
-                    city_super_units[i] = m.rewards.count(SUPER_UNIT) as i16;
-                }
-                if m.kind == CITY && x.owner == viewer {
-                    city_population[i] = m.population as i16;
-                    city_progress[i] = m.xp as i16;
-                    city_connected[i] = m.connected_to_capital_of_player as i16;
-                    city_wall[i] = i16::from(m.rewards.contains(&CITY_WALL));
-                }
+    let len = TILE_PLANES.len() * n;
+    let same = |k: &Kept| {
+        out.tiles.len() == len
+            && k.board == now.board
+            && k.viewer == viewer
+            && k.revealed == revealed
+            && k.rainbow == rainbow
+            && k.peace == now.peace
+    };
+    let since = match &kept {
+        Some(k) if same(k) => Some(k.clock),
+        _ => None,
+    };
+    if since.is_none() {
+        out.tiles.clear();
+        out.tiles.resize(len, UNKNOWN);
+    }
+    // a failed write leaves nothing kept
+    let mut kept = kept;
+    if let Some(k) = kept.as_deref_mut() {
+        k.board = 0;
+    }
+    let mut planes: Vec<&mut [i16]> = out.tiles.chunks_mut(n).collect();
+    for i in 0..n {
+        match since {
+            None => {}
+            Some(c) if g.tiles.fields_stamp(i) > c || g.tiles.unit_stamp(i) > c => {
+                planes.iter_mut().for_each(|p| p[i] = UNKNOWN);
             }
-            _ => {
-                improvement[i] = 0;
-                level[i] = 0;
-            }
+            Some(_) => continue,
         }
-        unit_kind[i] = 0;
-        unit_owner[i] = 0;
-        let Some(u) = x.unit.and_then(|node| g.units.get(node as usize)) else {
-            continue;
-        };
-        let fx = crate::menu::unit_effect_list(g, u.effects);
-        // an invisible foreign unit shows only to a player at peace with its owner
-        if u.owner != viewer
-            && fx.contains(&INVISIBLE)
-            && crate::menu::relation(g, viewer, u.owner) != PEACE
-        {
-            continue;
-        }
-        unit_kind[i] = u.kind as i16;
-        unit_owner[i] = u.owner as i16;
-        // health as the game displays it
-        unit_health[i] = (u.health as u16).div_ceil(10) as i16;
-        unit_veteran[i] = i16::from(u.promotion_level != 0);
-        unit_kills[i] = u.xp as i16;
-        if u.owner == viewer {
-            unit_effects[i] = bits(fx.iter().copied())?;
-            unit_passenger[i] = u
-                .passenger
-                .and_then(|p| g.units.get(p as usize))
-                .map_or(0, |p| p.kind as i16);
-            unit_moved[i] = i16::from(u.moved);
-            unit_attacked[i] = i16::from(u.attacked);
-            unit_home[i] = tile_index(u.home);
-        }
+        write_tile(g, t, viewer, revealed, rainbow, i, &mut planes)?;
+    }
+    if let Some(k) = kept {
+        *k = now;
     }
     out.tech.clear();
     out.tech.extend(me.available_tech.iter().map(|&k| k as i16));
@@ -309,5 +333,95 @@ pub fn write(g: &Game, t: &Tables, viewer: i32, out: &mut View) -> Result<(), St
         .collect();
     met.sort_by_key(|p| p.seat);
     out.players.extend(met);
+    Ok(())
+}
+
+/// Tile `i`'s entries in every plane, over entries that are all UNKNOWN.
+fn write_tile(
+    g: &Game,
+    t: &Tables,
+    viewer: i32,
+    revealed: u32,
+    rainbow: bool,
+    i: usize,
+    planes: &mut [&mut [i16]],
+) -> Result<(), String> {
+    let tile_index = |c: crate::state::Xy| g.index(c).map_or(UNKNOWN, |i| i as i16);
+    let [explored, terrain, climate, resource, improvement, level, owner, capital, ruling, road, route, effects, ruin_hint, unit_kind, unit_owner, unit_health, unit_veteran, unit_effects, unit_passenger, unit_moved, unit_attacked, unit_kills, unit_home, city_population, city_connected, city_progress, city_wall, city_parks, city_super_units] =
+        planes
+    else {
+        return Err("view planes".into());
+    };
+    let x = &g.tiles[i];
+    if !x.explorers.contains(&viewer) {
+        explored[i] = 0;
+        ruin_hint[i] = i16::from(rainbow && x.improvement.as_ref().is_some_and(|m| m.kind == RUIN));
+        return Ok(());
+    }
+    explored[i] = 1;
+    ruin_hint[i] = 0;
+    terrain[i] = x.terrain as i16;
+    climate[i] = x.climate as i16;
+    // a resource shows on a tile without an improvement, if the viewer's tech reveals its kind
+    resource[i] = match x.resource.filter(|_| x.improvement.is_none()) {
+        Some(kind) if (0..32).contains(&kind) && revealed >> kind & 1 == 1 => kind as i16,
+        _ => 0,
+    };
+    owner[i] = x.owner as i16;
+    capital[i] = x.capital_of as i16;
+    ruling[i] = tile_index(x.ruling_city);
+    road[i] = i16::from(x.has_road);
+    route[i] = i16::from(x.has_route);
+    effects[i] = bits(x.effects.iter().map(|&e| i64::from(e)))?;
+    match &x.improvement {
+        // a kind the catalog does not know is not shown (as the game's board)
+        Some(m) if t.improvements.get(m.kind as usize).is_some() => {
+            improvement[i] = m.kind as i16;
+            level[i] = if m.kind == CITY { m.level as i16 } else { 0 };
+            if m.kind == CITY {
+                city_parks[i] = m.rewards.count(PARK) as i16;
+                city_super_units[i] = m.rewards.count(SUPER_UNIT) as i16;
+            }
+            if m.kind == CITY && x.owner == viewer {
+                city_population[i] = m.population as i16;
+                city_progress[i] = m.xp as i16;
+                city_connected[i] = m.connected_to_capital_of_player as i16;
+                city_wall[i] = i16::from(m.rewards.contains(&CITY_WALL));
+            }
+        }
+        _ => {
+            improvement[i] = 0;
+            level[i] = 0;
+        }
+    }
+    unit_kind[i] = 0;
+    unit_owner[i] = 0;
+    let Some(u) = x.unit.and_then(|node| g.units.get(node as usize)) else {
+        return Ok(());
+    };
+    let fx = crate::menu::unit_effect_list(g, u.effects);
+    // an invisible foreign unit shows only to a player at peace with its owner
+    if u.owner != viewer
+        && fx.contains(&INVISIBLE)
+        && crate::menu::relation(g, viewer, u.owner) != PEACE
+    {
+        return Ok(());
+    }
+    unit_kind[i] = u.kind as i16;
+    unit_owner[i] = u.owner as i16;
+    // health as the game displays it
+    unit_health[i] = (u.health as u16).div_ceil(10) as i16;
+    unit_veteran[i] = i16::from(u.promotion_level != 0);
+    unit_kills[i] = u.xp as i16;
+    if u.owner == viewer {
+        unit_effects[i] = bits(fx.iter().copied())?;
+        unit_passenger[i] = u
+            .passenger
+            .and_then(|p| g.units.get(p as usize))
+            .map_or(0, |p| p.kind as i16);
+        unit_moved[i] = i16::from(u.moved);
+        unit_attacked[i] = i16::from(u.attacked);
+        unit_home[i] = tile_index(u.home);
+    }
     Ok(())
 }

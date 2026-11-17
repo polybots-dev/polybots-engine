@@ -214,11 +214,11 @@ fn a_changed_tile_and_a_refusal_are_seen() {
         .iter()
         .position(|x| x.explorers.contains(&viewer))
         .unwrap();
-    g.tiles[explored].terrain += 1;
+    g.tile_mut(explored).terrain += 1;
     let after = gpu_view::twin(&device::to_device(&g).unwrap(), &flat, viewer);
     assert!(after.as_ref() != Ok(&before) && after == reference(&g, &t, viewer));
     // an effect the view's bit set cannot hold
-    g.tiles[explored].effects.push(15);
+    g.tile_mut(explored).effects.push(15);
     let refused = gpu_view::twin(&device::to_device(&g).unwrap(), &flat, viewer);
     assert_eq!(refused, reference(&g, &t, viewer));
     assert_eq!(
@@ -291,8 +291,8 @@ fn bad_effects_and_a_corrupted_block() {
     for effect in [20i64, 127, 128, (1 << 32) + 3] {
         let mut list = engine_fast::inline::Inline::<i64, 9>::new();
         list.push(effect);
-        g.effect_lists.push(list);
-        g.units[node].effects = (g.effect_lists.len() - 1) as u32;
+        let list = g.push_effects(list);
+        g.unit_mut(node).effects = list;
         // the block holds effect ids in a byte (up to 127): a wider one is refused at upload
         let block = device::to_device(&g);
         if effect > 127 {
@@ -302,8 +302,8 @@ fn bad_effects_and_a_corrupted_block() {
                     "unit effect {effect} is outside the device's range"
                 ))
             );
-            g.units[node].effects = 0;
-            g.effect_lists.pop();
+            g.unit_mut(node).effects = 0;
+            g.pop_effects();
             continue;
         }
         let got = gpu_view::twin(&block.unwrap(), &flat, viewer);
@@ -336,7 +336,7 @@ fn tile_and_unit_effects_show_as_in_the_engine() {
     });
     let mut shown = [0usize; 2];
     for (k, mut g) in states.into_iter().enumerate() {
-        for (i, tile) in g.tiles.iter_mut().enumerate() {
+        for (i, tile) in g.tiles_mut().iter_mut().enumerate() {
             tile.effects.clear();
             for e in 0..((i + k) % 4) as i32 {
                 tile.effects.push((i as i32 * 3 + e * 5 + k as i32) % 15);
@@ -347,8 +347,8 @@ fn tile_and_unit_effects_show_as_in_the_engine() {
             for e in 0..((node + k) % 4) as i64 {
                 list.push((node as i64 * 7 + e * 4) % 15);
             }
-            g.effect_lists.push(list);
-            g.units[node].effects = (g.effect_lists.len() - 1) as u32;
+            let list = g.push_effects(list);
+            g.unit_mut(node).effects = list;
         }
         let block = device::to_device(&g).unwrap();
         for viewer in seats(&g) {
@@ -442,8 +442,8 @@ fn an_invisible_unit_shows_only_at_peace() {
     let node = g.tiles[tile].unit.unwrap() as usize;
     let mut invisible = engine_fast::inline::Inline::<i64, 9>::new();
     invisible.push(3);
-    g.effect_lists.push(invisible);
-    g.units[node].effects = (g.effect_lists.len() - 1) as u32;
+    let list = g.push_effects(invisible);
+    g.unit_mut(node).effects = list;
     let hidden = gpu_view::twin(&device::to_device(&g).unwrap(), &flat, me).unwrap();
     assert!(Ok(&hidden) == reference(&g, &t, me).as_ref());
     assert_eq!(hidden.tile_plane(13)[tile], 0, "the unit kind is hidden");

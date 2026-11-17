@@ -102,13 +102,13 @@ fn a_lost_city_rises_as_in_the_engine() {
         // the mover's unit stands on a ruin there, ready to act
         let from = g.units[node as usize].coordinates;
         let fi = g.index(from).unwrap();
-        g.tiles[fi].unit = None;
-        g.tiles[i].unit = Some(node);
-        let u = &mut g.units[node as usize];
+        g.set_unit_at(fi, None);
+        g.set_unit_at(i, Some(node));
+        let u = g.unit_mut(node as usize);
         u.coordinates = c;
         u.moved = false;
         u.attacked = false;
-        g.tiles[i].improvement = Some(Improvement {
+        g.tile_mut(i).improvement = Some(Improvement {
             kind: t.improvements.id("ruin").unwrap() as i32,
             owner: 0,
             founder: 0,

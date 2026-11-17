@@ -8,6 +8,12 @@
 #include "status.h"
 #include "outputs.h"
 
+/* The batches' blocking streams order against the legacy default stream (ef_cuda_step_launch);
+ * a per-thread default stream would drop that ordering. */
+#ifdef CUDA_API_PER_THREAD_DEFAULT_STREAM
+#error "the device batch needs the legacy default stream"
+#endif
+
 /* A launch's capacities: every block in it has room for `tiles` tiles and `units` units, and
  * every view room for `tiles` tiles. */
 typedef struct {
@@ -428,6 +434,13 @@ struct EfDevice {
     int32_t *d_applied;
     uint32_t *d_word;
     uint64_t to_device, to_host;
+    /* the device step's stream (blocking, so the default stream's work on this batch orders
+     * before and after it), the event of its last launch, the pinned host copy of its status
+     * word, and whether a launch is waiting for ef_cuda_step_wait */
+    cudaStream_t stream;
+    cudaEvent_t stepped;
+    uint32_t *h_word;
+    int32_t in_flight;
     /* the staging area of an upload (blocks, then their slots), grown as needed */
     void *d_staging;
     size_t staging_size;
@@ -441,8 +454,16 @@ static cudaError_t ef_copy(EfDevice *d, void *dst, const void *src, size_t bytes
     return cudaMemcpy(dst, src, bytes, kind);
 }
 
+/* ef_copy queued on `stream` */
+static cudaError_t ef_copy_async(EfDevice *d, void *dst, const void *src, size_t bytes, cudaMemcpyKind kind, cudaStream_t stream) {
+    if (kind == cudaMemcpyHostToDevice) d->to_device += bytes;
+    if (kind == cudaMemcpyDeviceToHost) d->to_host += bytes;
+    return cudaMemcpyAsync(dst, src, bytes, kind, stream);
+}
+
 void ef_cuda_destroy(EfDevice *d) {
     if (!d) return;
+    if (d->in_flight) cudaEventSynchronize(d->stepped);   /* a launched step still uses the arrays */
     cudaFree(d->d_games);
     cudaFree(d->d_tables);
     cudaFree(d->d_scratch);
@@ -468,6 +489,9 @@ void ef_cuda_destroy(EfDevice *d) {
     cudaFree(d->out.defence);
     cudaFree(d->d_applied);
     cudaFree(d->d_word);
+    if (d->stepped) cudaEventDestroy(d->stepped);
+    if (d->stream) cudaStreamDestroy(d->stream);
+    cudaFreeHost(d->h_word);
     free(d);
 }
 
@@ -496,6 +520,9 @@ EfDevice *ef_cuda_create(int32_t games, int32_t tile_cap, int32_t unit_cap, int3
     if (e == cudaSuccess) e = cudaMalloc(&d->out.tech, n * (size_t)(techs > 0 ? techs : 1) * sizeof(int16_t));
     if (e == cudaSuccess) e = cudaMalloc(&d->d_applied, n * sizeof(int32_t));
     if (e == cudaSuccess) e = cudaMalloc(&d->d_word, 2 * sizeof(uint32_t));
+    if (e == cudaSuccess) e = cudaMallocHost((void **)&d->h_word, 2 * sizeof(uint32_t));
+    if (e == cudaSuccess) e = cudaStreamCreate(&d->stream);
+    if (e == cudaSuccess) e = cudaEventCreateWithFlags(&d->stepped, cudaEventDisableTiming);
     /* all bits set: -1 in every exported integer of a slot not yet run */
     if (e == cudaSuccess) e = cudaMemset(d->out.scalars, 0xFF, n * EF_OUT_SCALARS * sizeof(int32_t));
     if (e == cudaSuccess) e = cudaMemset(d->out.players, 0xFF, n * EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS * sizeof(int64_t));
@@ -808,32 +835,105 @@ int ef_cuda_on_device(uint64_t ptr) {
     return (a.type == cudaMemoryTypeDevice || a.type == cudaMemoryTypeManaged) && a.device == 0;
 }
 
-/* One decision per slot from `actions`, int32 per slot in device memory (k_device_step), then
- * wait; word[0] the slots not playing, word[1] those that stopped in this call. The work of any
- * other user of the device (a policy on another stream) is waited for first. */
-int ef_cuda_step_device(EfDevice *d, uint64_t actions, int32_t threads, uint32_t *word) {
-    if (threads <= 0 || threads > 1024) return (int)cudaErrorInvalidValue;
-    cudaError_t e = cudaDeviceSynchronize();
-    if (e == cudaSuccess) e = cudaMemset(d->d_word, 0, 2 * sizeof(uint32_t));
+/* One decision per slot from `actions`, int32 per slot in device memory (k_device_step), queued
+ * on the batch's stream with the copy of its status word, without waiting: ef_cuda_step_wait
+ * returns the word. The batch's earlier work on the default stream runs first (a blocking
+ * stream); `actions` must be complete by then, written on the default stream or this batch's
+ * stream (ef_cuda_random_actions) or waited for by the caller. One launch at a time. Only
+ * work on non-blocking streams runs beside it: the default stream's waits for it. */
+int ef_cuda_step_launch(EfDevice *d, uint64_t actions, int32_t threads) {
+    if (threads <= 0 || threads > 1024 || d->in_flight) return (int)cudaErrorInvalidValue;
+    cudaError_t e = cudaMemsetAsync(d->d_word, 0, 2 * sizeof(uint32_t), d->stream);
     if (e != cudaSuccess) return (int)e;
-    k_device_step<<<(unsigned)((d->games + threads - 1) / threads), (unsigned)threads>>>(
+    k_device_step<<<(unsigned)((d->games + threads - 1) / threads), (unsigned)threads, 0, d->stream>>>(
         d->d_games, d->caps, d->games, d->d_tables, d->d_checks, d->d_work, d->d_menus, d->d_views,
         (const int32_t *)(uintptr_t)actions, d->d_applied, d->d_status, d->d_winners, d->d_results, d->d_counts, d->out,
         d->d_word);
     e = cudaGetLastError();
-    if (e == cudaSuccess) e = ef_copy(d, word, d->d_word, 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+    if (e == cudaSuccess) e = ef_copy_async(d, d->h_word, d->d_word, 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost, d->stream);
+    if (e == cudaSuccess) e = cudaEventRecord(d->stepped, d->stream);
+    if (e == cudaSuccess) d->in_flight = 1;
     return (int)e;
 }
 
-/* The benchmark's policy into `actions` (device memory, int32 per slot): k_random_actions. */
+/* Wait for the last ef_cuda_step_launch; word[0] the slots not playing, word[1] those that
+ * stopped in that call */
+int ef_cuda_step_wait(EfDevice *d, uint32_t *word) {
+    if (!d->in_flight) return (int)cudaErrorInvalidValue;
+    cudaError_t e = cudaEventSynchronize(d->stepped);
+    d->in_flight = 0;
+    if (e == cudaSuccess) { word[0] = d->h_word[0]; word[1] = d->h_word[1]; }
+    return (int)e;
+}
+
+/* ef_cuda_step_launch and its wait, after the work of every other user of the device (a policy
+ * on another stream) */
+int ef_cuda_step_device(EfDevice *d, uint64_t actions, int32_t threads, uint32_t *word) {
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return (int)e;
+    int r = ef_cuda_step_launch(d, actions, threads);
+    return r != 0 ? r : ef_cuda_step_wait(d, word);
+}
+
+/* The benchmark's policy into `actions` (device memory, int32 per slot): k_random_actions, on
+ * the batch's stream, so a step launched after it reads it */
 int ef_cuda_random_actions(EfDevice *d, uint64_t seed, uint64_t actions, int32_t threads) {
     if (threads <= 0 || threads > 1024) return (int)cudaErrorInvalidValue;
-    k_random_actions<<<(unsigned)((d->games + threads - 1) / threads), (unsigned)threads>>>(
+    k_random_actions<<<(unsigned)((d->games + threads - 1) / threads), (unsigned)threads, 0, d->stream>>>(
         d->d_menus, d->d_status, d->d_counts, d->games, seed, (int32_t *)(uintptr_t)actions);
     return (int)cudaGetLastError();
 }
 
-/* the bytes this batch's calls copied to and from the host so far */
+/* ---- benchmark only: a stand-in for a policy's forward pass (loop_bench's overlap mode) ---- */
+
+/* c = a b for `rows` rows of EF_LOAD_K floats against a EF_LOAD_K x EF_LOAD_K matrix, in
+ * 16 x 16 tiles */
+#define EF_LOAD_K 256
+__global__ void k_load(const float *a, const float *b, float *c, int rows) {
+    __shared__ float ta[16][16], tb[16][16];
+    int r = blockIdx.y * 16 + threadIdx.y, col = blockIdx.x * 16 + threadIdx.x;
+    float sum = 0.0f;
+    for (int k0 = 0; k0 < EF_LOAD_K; k0 += 16) {
+        ta[threadIdx.y][threadIdx.x] = r < rows ? a[(size_t)r * EF_LOAD_K + k0 + threadIdx.x] : 0.0f;
+        tb[threadIdx.y][threadIdx.x] = b[(size_t)(k0 + threadIdx.y) * EF_LOAD_K + col];
+        __syncthreads();
+        for (int k = 0; k < 16; k++) sum += ta[threadIdx.y][k] * tb[k][threadIdx.x];
+        __syncthreads();
+    }
+    if (r < rows) c[(size_t)r * EF_LOAD_K + col] = sum;
+}
+
+static cudaStream_t ef_load_stream;
+static float *ef_load_a, *ef_load_b, *ef_load_c;
+static int32_t ef_load_rows;
+
+/* Queue `repeats` products of `rows` rows on the load stream (non-blocking, so it runs beside
+ * the batches' streams); ef_cuda_load_wait waits for them */
+int ef_cuda_load(int32_t rows, int32_t repeats) {
+    if (rows <= 0 || repeats < 0) return (int)cudaErrorInvalidValue;
+    cudaError_t e = cudaSuccess;
+    if (!ef_load_stream) e = cudaStreamCreateWithFlags(&ef_load_stream, cudaStreamNonBlocking);
+    if (e == cudaSuccess && rows > ef_load_rows) {
+        cudaFree(ef_load_a); cudaFree(ef_load_b); cudaFree(ef_load_c);
+        e = cudaMalloc((void **)&ef_load_a, (size_t)rows * EF_LOAD_K * sizeof(float));
+        if (e == cudaSuccess) e = cudaMalloc((void **)&ef_load_b, (size_t)EF_LOAD_K * EF_LOAD_K * sizeof(float));
+        if (e == cudaSuccess) e = cudaMalloc((void **)&ef_load_c, (size_t)rows * EF_LOAD_K * sizeof(float));
+        if (e == cudaSuccess) e = cudaMemsetAsync(ef_load_a, 0, (size_t)rows * EF_LOAD_K * sizeof(float), ef_load_stream);
+        if (e == cudaSuccess) e = cudaMemsetAsync(ef_load_b, 0, (size_t)EF_LOAD_K * EF_LOAD_K * sizeof(float), ef_load_stream);
+        ef_load_rows = e == cudaSuccess ? rows : 0;
+    }
+    dim3 grid(EF_LOAD_K / 16, (unsigned)((rows + 15) / 16)), block(16, 16);
+    for (int32_t k = 0; e == cudaSuccess && k < repeats; k++) {
+        k_load<<<grid, block, 0, ef_load_stream>>>(ef_load_a, ef_load_b, ef_load_c, rows);
+        e = cudaGetLastError();
+    }
+    return (int)e;
+}
+
+int ef_cuda_load_wait(void) {
+    return ef_load_stream ? (int)cudaStreamSynchronize(ef_load_stream) : 0;
+}
+
 /* `bytes` from device address `from` (one of the batch's exported arrays) to the host, counted */
 int ef_cuda_read(EfDevice *d, uint64_t from, uint64_t bytes, void *to) {
     return (int)ef_copy(d, to, (const void *)(uintptr_t)from, (size_t)bytes, cudaMemcpyDeviceToHost);

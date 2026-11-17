@@ -186,5 +186,48 @@ class BatchTest(unittest.TestCase):
 
 
 
+class OutputsTest(unittest.TestCase):
+    """The `income` and `max_health` outputs (the cpu backend only). Their values are
+    checked against the per-game queries in the batch crate's `tests/outputs.rs`."""
+
+    def test_shapes_types_and_their_relation_to_the_view(self):
+        games, size = 4, 11
+        batch = engine_fast.Batch(games=games + 1, size=size, outputs=("income", "max_health"))
+        batch.reset(np.arange(games), np.arange(1, games + 1), [7, 7, 7])
+        rng = np.random.default_rng(3)
+        shown = 0
+        for _ in range(150):
+            status = batch.status()
+            income, max_health = batch.income(), batch.max_health()
+            self.assertEqual((income.dtype, income.shape), (np.int32, (games + 1,)))
+            self.assertEqual((max_health.dtype, max_health.shape), (np.int16, (games + 1, size * size)))
+            # slots not playing (the last one is never started) have none
+            self.assertTrue((income[status != 1] == -1).all())
+            self.assertTrue((max_health[status != 1] == -1).all())
+            self.assertTrue((income[status == 1] >= 0).all())
+            tiles = batch.views()[0]
+            owner = tiles[:, engine_fast.TILE_PLANES.index("unit_owner")]
+            panel = max_health >= 0
+            # a unit's maximum health shows only where the view shows the unit (a carrier's is
+            # its passenger's, so it is not compared with the carrier's health)
+            self.assertTrue((owner[panel] > 0).all())
+            shown += int(panel.sum())
+            offsets, moves = batch.moves()
+            batch.step(choose(offsets, moves, status, rng))
+        self.assertGreater(shown, 0)
+
+    def test_an_output_not_asked_for_is_refused(self):
+        batch = engine_fast.Batch(games=1, size=11, outputs=("income",))
+        batch.reset(np.arange(1), np.arange(1, 2), [7, 7])
+        self.assertEqual(batch.income().shape, (1,))
+        with self.assertRaisesRegex(ValueError, "max_health"):
+            batch.max_health()
+        with self.assertRaisesRegex(ValueError, "unknown output"):
+            engine_fast.Batch(games=1, outputs=("health",))
+        for output in ("income", "max_health"):
+            with self.assertRaisesRegex(ValueError, "cpu backend only"):
+                engine_fast.Batch(games=1, backend="gpu", outputs=(output,))
+
+
 if __name__ == "__main__":
     unittest.main()

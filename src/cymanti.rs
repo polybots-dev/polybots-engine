@@ -28,9 +28,7 @@ fn unit_has(t: &Tables, kind: i32, a: &str) -> bool {
 
 fn effects_mut(g: &mut Game, n: u32) -> Result<&mut crate::inline::Inline<i64, 9>, String> {
     let list = g.units[n as usize].effects as usize;
-    g.effect_lists
-        .get_mut(list)
-        .ok_or_else(|| "effect list".into())
+    g.effects_mut(list).ok_or_else(|| "effect list".into())
 }
 
 fn add_effect(g: &mut Game, n: u32, e: i64) -> Result<(), String> {
@@ -42,7 +40,7 @@ fn add_effect(g: &mut Game, n: u32, e: i64) -> Result<(), String> {
 }
 
 fn remove_first(g: &mut Game, list: u32, e: i64) -> Result<(), String> {
-    let fx = g.effect_lists.get_mut(list as usize).ok_or("effect list")?;
+    let fx = g.effects_mut(list as usize).ok_or("effect list")?;
     if let Some(k) = fx.iter().position(|&v| v == e) {
         fx.remove(k);
     }
@@ -75,8 +73,8 @@ pub(crate) fn boost_options(g: &Game, p: i32, c: Xy) -> Vec<Xy> {
 /// The Swarm (and Boost) command: the unit is spent and BoostOthers is queued; no command base
 pub(crate) fn swarm_command(g: &mut Game, p: i32, c: Xy, out: &mut Vec<Action>) {
     if let Some(n) = g.tile(c).and_then(|t| t.unit) {
-        g.units[n as usize].moved = true;
-        g.units[n as usize].attacked = true;
+        g.unit_mut(n as usize).moved = true;
+        g.unit_mut(n as usize).attacked = true;
     }
     out.push(Action::TurnEffect(TurnEffect::BoostOthers {
         player: p,
@@ -127,7 +125,8 @@ pub(crate) fn decompose_command(
 /// Decomposing: the improvement is marked decomposing
 pub(crate) fn decompose(g: &mut Game, c: Xy) -> Result<(), String> {
     let i = g.index(c).ok_or("decompose tile")?;
-    let m = g.tiles[i]
+    let m = g
+        .tile_mut(i)
         .improvement
         .as_mut()
         .ok_or("decompose without an improvement")?;
@@ -344,7 +343,7 @@ pub(crate) fn explode(
     }
     if u.leader != 0 {
         if let Some(l) = crate::linked::find(g, u.leader) {
-            g.units[l as usize].follower = 0;
+            g.unit_mut(l as usize).follower = 0;
         }
     }
     spores(g, t, c, out)?;
@@ -393,7 +392,7 @@ pub(crate) fn explode(
             amount,
         }));
     }
-    g.tiles[i].unit = None;
+    g.set_unit_at(i, None);
     Ok(())
 }
 
@@ -406,7 +405,7 @@ pub(crate) fn can_explode(g: &Game, t: &Tables, u: &Unit) -> bool {
 
 /// Whether a build creates tile effect `e` (Algae, with Foam on the Cute game skin)
 pub(crate) fn create_effect(g: &mut Game, i: usize, e: i32, cute: bool) -> Result<(), String> {
-    let effects = &mut g.tiles[i].effects;
+    let effects = &mut g.tile_mut(i).effects;
     if !effects.contains(&e) {
         effects.try_push(e)?;
     }

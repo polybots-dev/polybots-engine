@@ -166,7 +166,7 @@ pub(crate) fn freeze_area_command(
 
 fn spend(g: &mut Game, c: Xy) -> Option<u32> {
     let n = g.tile(c)?.unit?;
-    let u = &mut g.units[n as usize];
+    let u = g.unit_mut(n as usize);
     u.moved = true;
     u.attacked = true;
     Some(n)
@@ -248,17 +248,17 @@ pub(crate) fn freeze_tile(
     {
         let i = g.index(c).ok_or("freeze tile")?;
         if [WATER, OCEAN].contains(&g.tiles[i].terrain) {
-            g.tiles[i].terrain = ICE;
+            g.tile_mut(i).terrain = ICE;
         }
         if g.tiles[i].effects.contains(&FLOODED) {
             if let Some(k) = g.tiles[i].effects.iter().position(|&e| e == SWAMPED) {
-                g.tiles[i].effects.remove(k);
+                g.tile_mut(i).effects.remove(k);
             }
         }
         let pi = player_index(g, actor)?;
         settle_climate(g, pi);
-        g.tiles[i].climate = g.players[pi].climate;
-        g.tiles[i].skin = g.players[pi].skin;
+        g.tile_mut(i).climate = g.players[pi].climate;
+        g.tile_mut(i).skin = g.players[pi].skin;
         ice_bank_levels(g, t, out)?;
     }
     crate::mapgen::candidate::generate_shorelines(g);
@@ -287,7 +287,7 @@ pub(crate) fn freeze_unit(
     if origin != NULL {
         crate::attack::perform_attack(g, t, actor, origin, target, damage, out)?;
     }
-    let u = &mut g.units[n as usize];
+    let u = g.unit_mut(n as usize);
     u.moved = true;
     u.attacked = true;
     add_effect(g, n, FROZEN)?;
@@ -306,7 +306,7 @@ pub(crate) fn freeze_unit(
 
 fn add_effect(g: &mut Game, n: u32, e: i64) -> Result<(), String> {
     let list = g.units[n as usize].effects as usize;
-    let fx = g.effect_lists.get_mut(list).ok_or("effect list")?;
+    let fx = g.effects_mut(list).ok_or("effect list")?;
     if !fx.contains(&e) {
         fx.try_push(e)?;
     }
@@ -437,7 +437,7 @@ pub(crate) fn break_ice(
         }
     }
     if breakable(g, t, c, p) {
-        g.tiles[i].terrain = OCEAN;
+        g.tile_mut(i).terrain = OCEAN;
         for d in [
             Xy { x: c.x - 1, y: c.y },
             Xy { x: c.x, y: c.y - 1 },
@@ -447,11 +447,11 @@ pub(crate) fn break_ice(
             if g.tile(d)
                 .is_some_and(|x| [FIELD, MOUNTAIN, FOREST].contains(&x.terrain))
             {
-                g.tiles[i].terrain = WATER;
+                g.tile_mut(i).terrain = WATER;
                 break;
             }
         }
-        g.tiles[i].skin = 0;
+        g.tile_mut(i).skin = 0;
     }
     ice_bank_levels(g, t, out)?;
     crate::mapgen::candidate::generate_shorelines(g);
@@ -590,7 +590,7 @@ pub(crate) fn change_climate(g: &mut Game, p: i32, c: Xy, climate: i32) -> Resul
     let pi = player_index(g, p)?;
     let skin = g.players[pi].skin;
     let i = g.index(c).ok_or("climate change tile")?;
-    let tile = &mut g.tiles[i];
+    let tile = g.tile_mut(i);
     tile.climate = climate;
     tile.skin = skin;
     if tile.effects.contains(&FLOODED) && skin == 17 && !tile.effects.contains(&SWAMPED) {

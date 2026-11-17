@@ -1,34 +1,88 @@
 # engine-fast
 
-A fast, exact rules engine for The Battle of Polytopia, for training game-playing bots. It
-plays many games per call: it hands out what the player to move may know (the *view*) and
-that player's *legal moves*, and takes one move per game. It is a simulator for training,
-not a way to play the game.
+**A fast, exact simulator of The Battle of Polytopia's rules, for training game-playing bots.**
 
-The tree contains none of the game's code or data: the engine reads the game's rule data
-from your own installed copy of the game (below).
+- **What it does.** It runs thousands of games side by side. For each game it hands you what
+  the player to move may know (the *view*) and that player's *legal moves*. It then takes one
+  move per game and advances every game in one call.
+- **What it is for.** Self-play, reinforcement learning, and evaluating bots and search:
+  anywhere you need many games quickly, with the rules exactly right. It is not a way to play
+  the game.
+- **Exact or nothing.** The engine does not approximate. If a game reaches a rule the engine
+  does not implement, that game stops and names the rule; the other games play on.
+- **Two backends, one interface.** CPU threads, or an NVIDIA GPU that keeps every game, view and
+  legal list in device memory.
+- **Python or Rust.** A Python package (`engine_fast`, numpy arrays) on top of Rust crates.
+- **No game files included.** The engine reads the game's rule data from your own installed copy
+  of the game (see [Rule data](#rule-data)).
 
-## Disclaimer
+## Contents
 
-This is an unofficial community project. It is not affiliated with, endorsed by or
-supported by Midjiwan AB. *The Battle of Polytopia* and related names are trademarks of
-Midjiwan AB, used here only to describe what the project simulates. We respect Midjiwan's
-wishes. If Midjiwan asks us to change, restrict or remove any part of this project, we will
-do so promptly. Contact the maintainers by opening an issue.
+1. [Quick start](#quick-start)
+2. [Performance](#performance)
+3. [Rule data](#rule-data)
+4. [Where things are](#where-things-are)
+5. [Build and test](#build-and-test)
+6. [Scope](#scope)
+7. [What is checked](#what-is-checked)
+8. [Disclaimer](#disclaimer) and [Licence](#licence)
 
-## Layout
+Further reading:
+- [`python/README.md`](python/README.md): the Python interface, call by call.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): how the engine is built, how it is checked, and how to
+  extend it. Start there if you are changing the code, or if you are an AI assistant handed
+  this repository.
 
-| Path | What |
-| --- | --- |
-| `src/`, `tests/` | the engine (crate `engine-fast`): new games, legal moves, the step, the view and the rule queries |
-| `frame/` | shared value types (crate `engine-fast-frame`) |
-| `batch/` | many games per call on CPU threads (crate `engine-fast-batch`) |
-| `gpu/` | the same batch on an NVIDIA GPU (crate `engine-fast-gpu`, feature `cuda`) |
-| `python/` | the Python package `engine_fast` (built with maturin); its README documents the interface |
-| `tools/extract_rules.py` | copies the rule data out of an installed game |
-| `wheels/` | built Python packages (Linux x86_64 CPU and CUDA, macOS arm64) |
+## Quick start
 
-## The rule data
+Install the Python package (it needs a Rust toolchain; see [Build and test](#build-and-test))
+and point it at the rule data:
+
+    pip install ./python
+    export ENGINE_FAST_RULES=/path/to/rules.json
+
+Play 64 two-player games on an 11 x 11 board with random moves:
+
+```python
+import numpy as np
+import engine_fast
+
+batch = engine_fast.Batch(games=64, size=11, workers=4)
+batch.reset(np.arange(64), seeds=np.arange(1, 65), tribes=[7, 7])
+rng = np.random.default_rng(0)
+while (batch.status() == 1).any():                    # 1: playing
+    offsets, moves = batch.moves()                    # game i: moves[offsets[i]:offsets[i + 1]]
+    tiles, scalars, players, tech = batch.views()     # what each player to move may know
+    count = np.maximum(np.diff(offsets), 1)
+    pick = np.where(batch.status() == 1, rng.integers(0, count), engine_fast.SKIP)
+    batch.step(pick.astype(np.int32))                 # one index into each game's moves
+print(batch.status(), batch.winner())                 # 2: ended, 3: reached the move limit
+```
+
+Random moves include resigning, so these games end quickly. A real policy replaces the random
+pick: it reads the views and chooses an index into each game's list of legal moves. A move is always an index into that list, so an illegal move
+cannot be applied.
+
+## Performance
+
+Decisions per second; a decision is one move by one player. Random moves, two-player games,
+each game capped at 1 000 decisions. Measured on one 18-core server with an NVIDIA RTX
+3090. Your figures will differ with the hardware, board size, game length and the policy's
+own cost.
+
+| Backend | 11 x 11 | 16 x 16 |
+| --- | ---: | ---: |
+| CPU, 1 core | 55 000 | 45 000 |
+| CPU, 18 cores (36 threads) | 517 000 | 303 000 |
+| GPU, 16 384 games, end to end with finished games restarted | 353 000 | 271 000 |
+| GPU, 65 536 games, the same | 664 000 | 487 000 |
+
+On the 8 x 8 board, with short games of training length, the GPU reaches about 1 million
+decisions per second at 65 536 games. On the GPU a step copies 8 bytes to the host: views,
+legal moves and the policy's choices stay in device memory. Finished games restart from a
+queue that CPU threads fill ahead of time.
+
+## Rule data
 
 The engine needs the game's rule data (rules version 124, game build 2.18.0.16751), which is
 not distributed here. Copy it out of your installed game once:
@@ -37,49 +91,80 @@ not distributed here. Copy it out of your installed game once:
     python3 tools/extract_rules.py "<the game's install folder>" rules.json
     export ENGINE_FAST_RULES="$PWD/rules.json"
 
-UnityPy is needed by this tool only, not by the engine or the package. The tool reads the
-game's `data.unity3d` and does not start or change the game. It refuses
-rule data of any other version. The Python package reads the file `ENGINE_FAST_RULES` names
-(or `Batch(..., rules=path)`); the Rust tests and benchmarks read it at build time.
+- `tools/extract_rules.py` reads the game's `data.unity3d` (in the Mac and Linux installs) and
+  does not start or change the game. It refuses rule data of any other version.
+- UnityPy is needed by this tool only, not by the engine or the package.
+- The Python package reads the file `ENGINE_FAST_RULES` names, or `Batch(..., rules=path)`,
+  and refuses a file whose SHA-256 is not that of rules version 124. The Rust tests and
+  benchmarks read it at build time.
+
+## Where things are
+
+| Path | What |
+| --- | --- |
+| `src/` | the engine (crate `engine-fast`): new games, legal moves, the step, the view, the rule queries |
+| `src/mapgen/` | the game's map generator |
+| `tests/` | the engine's tests |
+| `frame/` | small value types shared by the crates (crate `engine-fast-frame`) |
+| `batch/` | many games per call on CPU threads (crate `engine-fast-batch`) |
+| `gpu/` | the same batch on an NVIDIA GPU (crate `engine-fast-gpu`, feature `cuda`) |
+| `gpu/kernel/` | the rules in C, built for the host and for CUDA |
+| `python/` | the Python package `engine_fast` (built with maturin) |
+| `tools/extract_rules.py` | copies the rule data out of an installed game |
+| `wheels/` | built Python packages (Linux x86_64 CPU and CUDA, macOS arm64) |
+
+`ARCHITECTURE.md` has a file-by-file map.
 
 ## Build and test
 
-Rust 1.92 or later. With `ENGINE_FAST_RULES` set:
+Rust 1.92 or later; Python 3.11 or later with numpy 2.1 or later. With `ENGINE_FAST_RULES` set:
 
     cargo test --release                                   # the engine
     cargo test --release --manifest-path batch/Cargo.toml  # the batch against single games
+    cargo test --release --manifest-path gpu/Cargo.toml    # the GPU rules, host build
     cargo test --release --manifest-path gpu/Cargo.toml --features cuda   # needs CUDA 12 and a GPU
     pip install ./python && python -m unittest discover -s python/tests
 
+For the Python package with the GPU backend, run `maturin build --release --features cuda` in
+`python/` on a machine with CUDA 12 and its `nvcc`. `EF_CUDA_ARCH` picks the GPU architecture
+(default `sm_86`). The device code takes several minutes to compile.
+
 ## Scope
 
-- Rules version 124, two to four seats, board sides 11 to 30 and nano (8 x 8, a board below
-  the game's smallest for quick experiments: the game's own map generator runs unchanged at
-  that side). Not the Tutorial.
+- Rules version 124. Two to four players. Not the Tutorial.
+- Board sides 11 to 30, and 8 x 8 ("nano"): a board below the game's smallest, for quick
+  experiments. The game's own map generator runs unchanged at that size.
 - Every tribe, the four special tribes (Aquarion, Elyrion, Polaris, Cymanti) included.
-- The engine never approximates: a game that reaches a rule it does not implement stops,
-  with that rule's name as the reason. Non-default skins are refused.
+- Non-default skins are refused.
 - No rewards: the view gives scores, and the status and winner give the outcome.
 
-## What is checked, and what is not
+## What is checked
 
-The engine was developed against a model of the game's rules and a set of recorded online
-games. Of 1 097 recorded games (rules version 123, the same rule data; boards up to 18 x 18)
-every one replays exactly, decision by decision, special tribes included. The GPU backend
-gives the same results and equals the CPU engine bit for bit.
+The engine was built against a model of the game's rules and checked on recorded online games:
+1 097 recorded games (rules version 123, the same rule data; boards up to 18 x 18) replay
+exactly, decision by decision, special tribes included. On those games the GPU backend gives
+the same results, equal to the CPU engine bit for bit. Those checks need the recorded games and the model,
+which are not distributed, so they cannot be rerun from this repository.
 
 Not verified against recorded games:
-- **rules version 124,** the version this package plays: no recorded games exist for it. It
-  is checked in random play only, and random play reaches rare mechanics slowly or not at
-  all;
-- **board sides 19 to 30,** and **nano (8 x 8)**: random-play checks only;
+- **rules version 124,** the version this package plays: no recorded games exist for it. It is
+  checked in random play only, and random play reaches rare mechanics slowly or not at all;
+- **board sides 19 to 30** and **8 x 8**: random-play checks only;
 - **Continents and Pangea maps** beyond the recorded games' few;
-- the **rule queries** and optional outputs that show what the game's screen shows (attack
-  previews, defence bonuses): compared on generated games, not on recorded ones.
+- the **rule queries and optional outputs** (attack previews, defence bonuses, income, maximum
+  health): compared on generated games, not on recorded ones.
 
-The tests here are the engine's own: digests of new games, move admission, allocation counts,
-the batch against single games, and the GPU against the CPU. They do not include the
-recorded games, which are not distributed.
+The tests in this repository are the engine's own: digests of new games, move admission,
+allocation counts, the batch against single games, the GPU rules against the Rust engine, and
+the Python package. `ARCHITECTURE.md` lists what each one shows.
+
+## Disclaimer
+
+This is an unofficial community project. It is not affiliated with, endorsed by or
+supported by Midjiwan AB. *The Battle of Polytopia* and related names are trademarks of
+Midjiwan AB, used here only to describe what the project simulates. We respect Midjiwan's
+wishes. If Midjiwan asks us to change, restrict or remove any part of this project, we will
+do so promptly. Contact the maintainers by opening an issue.
 
 ## Licence
 

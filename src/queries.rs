@@ -247,7 +247,7 @@ pub fn as_shown(g: &Game, viewer: i32) -> Cow<'_, Game> {
         return Cow::Borrowed(g);
     }
     let mut shown = g.clone();
-    for (x, y) in shown.tiles.iter_mut().zip(&g.tiles) {
+    for (x, y) in shown.tiles_mut().iter_mut().zip(&g.tiles) {
         if hidden(y) {
             x.unit = None;
         }

@@ -10,7 +10,7 @@
  * helpers below, which do what Rust's `as` does.
  *
  * The EF_FN macro and the cast and wrapping helpers follow the approach of engine-cu's pc.h
- * (see ../THIRD_PARTY.md). */
+ * (see NOTICE). */
 #ifndef EF_H
 #define EF_H
 

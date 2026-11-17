@@ -1,7 +1,7 @@
 //! A batch of game blocks that stays in GPU memory (`kernel/device.cu`). Blocks are uploaded
 //! into slots, kernels run over all slots, and outputs are read back when asked for.
 
-use crate::state::{Block, EfGame};
+use crate::state::{self, Block, EfGame};
 use crate::step::EfMove;
 use crate::tables::{DeviceTables, EfTables, KernelResult};
 use crate::view::{EfView, Views};
@@ -19,7 +19,11 @@ extern "C" {
     fn ef_cuda_exports(device: *mut c_void, x: *mut Exports) -> i32;
     fn ef_cuda_on_device(ptr: u64) -> i32;
     fn ef_cuda_step_device(device: *mut c_void, actions: u64, threads: i32, word: *mut u32) -> i32;
+    fn ef_cuda_step_launch(device: *mut c_void, actions: u64, threads: i32) -> i32;
+    fn ef_cuda_step_wait(device: *mut c_void, word: *mut u32) -> i32;
     fn ef_cuda_random_actions(device: *mut c_void, seed: u64, actions: u64, threads: i32) -> i32;
+    fn ef_cuda_load(rows: i32, repeats: i32) -> i32;
+    fn ef_cuda_load_wait() -> i32;
     fn ef_cuda_traffic(device: *mut c_void, to_device: *mut u64, to_host: *mut u64);
     fn ef_cuda_read(device: *mut c_void, from: u64, bytes: u64, to: *mut c_void) -> i32;
     fn ef_cuda_alloc(bytes: u64, ptr: *mut u64) -> i32;
@@ -249,34 +253,37 @@ impl DeviceBatch {
 
     /// Put a block of the batch's capacities into a slot.
     pub fn upload(&mut self, slot: usize, game: &Block) -> Result<(), String> {
-        self.upload_many(&[(slot, game)])
+        assert_eq!(
+            (game.tile_cap, game.unit_cap),
+            self.caps,
+            "a block of the batch's capacities"
+        );
+        self.upload_words(&[slot], game.words())
     }
 
-    /// Put blocks of the batch's capacities into distinct slots, in one copy and one check.
-    pub fn upload_many(&mut self, games: &[(usize, &Block)]) -> Result<(), String> {
-        let mut slots = Vec::with_capacity(games.len());
-        let mut bytes = Vec::with_capacity(games.iter().map(|(_, g)| g.bytes().len()).sum());
-        for &(slot, game) in games {
-            assert_eq!(
-                (game.tile_cap, game.unit_cap),
-                self.caps,
-                "a block of the batch's capacities"
-            );
-            if slots.contains(&(slot as i32)) {
+    /// Put blocks of the batch's capacities, laid end to end in `words`, into the distinct
+    /// `slots`, in one copy and one check.
+    pub fn upload_words(&mut self, slots: &[usize], words: &[u64]) -> Result<(), String> {
+        let stride = state::block_size(self.caps.0, self.caps.1) / 8;
+        assert_eq!(words.len(), slots.len() * stride, "one block per slot");
+        let mut seen = vec![false; self.games];
+        let mut index = Vec::with_capacity(slots.len());
+        for &slot in slots {
+            if *seen.get(slot).ok_or("slot out of range")? {
                 return Err("a slot uploaded twice in one call".into());
             }
-            slots.push(i32::try_from(slot).map_err(|_| "slot out of range")?);
-            bytes.extend_from_slice(game.bytes());
+            seen[slot] = true;
+            index.push(slot as i32);
         }
-        let count = i32::try_from(slots.len()).map_err(|_| "too many blocks")?;
+        let count = i32::try_from(index.len()).map_err(|_| "too many blocks")?;
         // SAFETY: a live handle, `count` slots and `count` contiguous blocks of the batch's
-        // capacities (bytes() is the whole block, 8-aligned in size); the C side checks the slots.
+        // capacities (8-aligned words); the C side checks each block in its slot.
         check(unsafe {
             ef_cuda_upload(
                 self.handle,
                 count,
-                slots.as_ptr(),
-                bytes.as_ptr().cast::<EfGame>(),
+                index.as_ptr(),
+                words.as_ptr().cast::<EfGame>(),
             )
         })
     }
@@ -410,9 +417,7 @@ impl DeviceBatch {
         bytes: u64,
         threads_per_block: usize,
     ) -> Result<[u32; 2], String> {
-        if bytes < 4 * self.games as u64 || !on_device(actions) || !actions.is_multiple_of(4) {
-            return Err("actions: one aligned i32 per slot in GPU 0 memory".into());
-        }
+        self.check_actions(actions, bytes)?;
         let mut word = [0u32; 2];
         // SAFETY: a live handle, actions checked above, two words written.
         check(unsafe {
@@ -424,6 +429,35 @@ impl DeviceBatch {
             )
         })?;
         Ok(word)
+    }
+
+    /// `step_device` without its waits: the step goes on the batch's stream after the batch's
+    /// earlier work, and `step_wait` returns the word. `actions` must be complete when the step
+    /// runs: written by `random_actions`, on the default stream, or waited for. One at a time.
+    pub fn step_launch(
+        &mut self,
+        actions: u64,
+        bytes: u64,
+        threads_per_block: usize,
+    ) -> Result<(), String> {
+        self.check_actions(actions, bytes)?;
+        // SAFETY: a live handle and actions checked above.
+        check(unsafe { ef_cuda_step_launch(self.handle, actions, threads_per_block as i32) })
+    }
+
+    /// Wait for the last `step_launch` and return its status word.
+    pub fn step_wait(&mut self) -> Result<[u32; 2], String> {
+        let mut word = [0u32; 2];
+        // SAFETY: a live handle; two words written.
+        check(unsafe { ef_cuda_step_wait(self.handle, word.as_mut_ptr()) })?;
+        Ok(word)
+    }
+
+    fn check_actions(&self, actions: u64, bytes: u64) -> Result<(), String> {
+        if bytes < 4 * self.games as u64 || !on_device(actions) || !actions.is_multiple_of(4) {
+            return Err("actions: one aligned i32 per slot in GPU 0 memory".into());
+        }
+        Ok(())
     }
 
     /// The benchmark's policy (a random legal row per playing slot, never Resign) into
@@ -469,4 +503,17 @@ impl Drop for DeviceBatch {
         // SAFETY: the handle came from ef_cuda_create and is destroyed once.
         unsafe { ef_cuda_destroy(self.handle) }
     }
+}
+
+/// Benchmark only: queue `repeats` products of `rows` x 256 by 256 x 256 floats on a stream of
+/// their own beside the batches' (a stand-in for a policy's forward pass).
+pub fn load(rows: usize, repeats: usize) -> Result<(), String> {
+    // SAFETY: plain values; the C side owns its buffers.
+    check(unsafe { ef_cuda_load(rows as i32, repeats as i32) })
+}
+
+/// Wait for the products `load` queued.
+pub fn load_wait() -> Result<(), String> {
+    // SAFETY: no arguments.
+    check(unsafe { ef_cuda_load_wait() })
 }

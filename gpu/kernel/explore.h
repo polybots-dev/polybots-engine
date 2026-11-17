@@ -132,7 +132,7 @@ EF_BIG EfResult ef_area_sorted(const EfGame *g, EfXy c, int32_t radius, EfArea *
 }
 
 EF_FN int ef_explored(const EfGame *g, int i, int32_t p) {
-    return p == EF_NATURE || ef_contains_u8(ef_ctiles(g)[i].explorers_n, ef_ctiles(g)[i].explorers_len_n, p);
+    return p == EF_NATURE || ef_tile_explored(&ef_ctiles(g)[i], p);
 }
 
 /* explore.rs explore_from: one Explore per unexplored tile in sight, far to near */
@@ -214,6 +214,7 @@ EF_BIG EfResult ef_explore(EfGame *g, const EfTables *t, int32_t p, EfXy c) {
     if (tile->explorers_len_n >= 5) return ef_short_list_full(5);
     EF_PUT(tile->explorers_n[tile->explorers_len_n], p, uint8_t);
     tile->explorers_len_n++; /* narrow: below 5, checked above */
+    tile->explorers_mask_n = (uint8_t)(tile->explorers_mask_n | ef_explorer_bit(p)); /* narrow: an or of 8-bit masks */
     g->needs_routes = 1;
     EfAction score = ef_action_at(EF_A_INCREASE_SCORE, p, c);
     score.i[0] = 5;

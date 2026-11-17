@@ -691,7 +691,7 @@ fn an_illegal_move_is_refused_as_in_the_engine() {
             let mut done = g.clone();
             let s = c.action.source.unwrap();
             let node = done.tile(xy(s)).unwrap().unit.unwrap();
-            done.units[node as usize].moved = true;
+            done.unit_mut(node as usize).moved = true;
             assert!(both(&done, &c.action).contains("cannot move"));
             moved = true;
             // the farthest empty tile, out of one turn's reach

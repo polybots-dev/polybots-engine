@@ -54,7 +54,7 @@ EF_BIG EfResult ef_route_accessible(EfGame *g, const EfTables *t, int32_t p, uin
     if (owner != 0) EF_TRY(ef_relation_state_of(g, p, owner, &r));
     int owned_or_peace = owner == p || (owner != 0 && r == EF_PEACE);
     if (owner != 0 && owner != p && !owned_or_peace) return ef_ok();
-    if (!(p == EF_NATURE || ef_contains_u8(ef_ctiles(g)[to].explorers_n, ef_ctiles(g)[to].explorers_len_n, p))) return ef_ok();
+    if (!(p == EF_NATURE || ef_tile_explored(&ef_ctiles(g)[to], p))) return ef_ok();
     const EfTile *target = &ef_ctiles(g)[to];
     int has_kind = target->has_improvement_n;
     int32_t kind = target->improvement.kind_n;

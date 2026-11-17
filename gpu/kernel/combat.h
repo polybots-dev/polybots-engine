@@ -1,6 +1,6 @@
 /* combat.h - port of engine-fast/src/combat.rs and attack.rs: attack targets, the defence
  * bonus, retaliation, the battle arithmetic (integers only), and the Attack command and the
- * Attack, Kill and Convert actions. Infiltration is not ported yet. */
+ * Attack, Kill and Convert actions. Infiltration is in infiltrate.h. */
 #ifndef EF_COMBAT_H
 #define EF_COMBAT_H
 
@@ -23,7 +23,7 @@ EF_FN EfResult ef_targets_push(EfTargets *t, EfXy at) {
 
 /* menu.rs visible_unit: the unit on an explored tile unless invisible, foreign and not at peace */
 EF_FN const EfUnit *ef_visible_unit(const EfGame *g, const EfTile *tile, int32_t viewer) {
-    if (!ef_contains_u8(tile->explorers_n, tile->explorers_len_n, viewer) || tile->unit_n == EF_NONE) return 0;
+    if (!ef_tile_explored(tile, viewer) || tile->unit_n == EF_NONE) return 0;
     const EfUnit *u = &ef_cunits(g)[tile->unit_n];
     int invisible = ef_unit_effect(g, u, EF_INVISIBLE_EFFECT);
     return (u->owner_n == viewer || !invisible || ef_relation(g, viewer, u->owner_n) == EF_PEACE) ? u : 0;
@@ -58,7 +58,7 @@ EF_BIG EfResult ef_attack_options(const EfGame *g, const EfTables *t, const EfUn
             if (ef_xy_eq(at, c)) continue;
             const EfTile *tile = ef_tile_c(g, at);
             if (!tile) return ef_err(EF_ERR_ATTACK_AREA_TILE, 0);
-            if (!ef_contains_u8(tile->explorers_n, tile->explorers_len_n, viewer)) continue;
+            if (!ef_tile_explored(tile, viewer)) continue;
             if (capturer) {
                 if (tile->has_improvement_n && tile->improvement.kind_n == EF_CITY && tile->owner_n != 0 && tile->owner_n != unit->owner_n) {
                     int32_t r = ef_relation(g, viewer, tile->owner_n);
@@ -202,7 +202,7 @@ EF_BIG EfResult ef_options_at(EfGame *g, const EfTables *t, int32_t viewer, EfXy
         for (int32_t y = y0; y <= y1; y++) {
             EfXy at = ef_xy(x, y);
             int32_t i = ef_tile_index(g, at);
-            if (ef_xy_eq(at, center) || (!include_hidden && !ef_contains_u8(ef_ctiles(g)[i].explorers_n, ef_ctiles(g)[i].explorers_len_n, viewer))) continue;
+            if (ef_xy_eq(at, center) || (!include_hidden && !ef_tile_explored(&ef_ctiles(g)[i], viewer))) continue;
             if (capturer) {
                 EfTile x0t = ef_ctiles(g)[i];
                 if (x0t.has_improvement_n && x0t.improvement.kind_n == EF_CITY && x0t.owner_n != 0 && x0t.owner_n != unit->owner_n) {

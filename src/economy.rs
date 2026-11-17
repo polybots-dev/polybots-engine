@@ -237,7 +237,7 @@ pub fn build(
     // the children pushed from here are buffered: moved behind the surrounding-area ones at the end
     let start = out.len();
     if kind != ROAD && !consumed && !temporary {
-        g.tiles[i].improvement = Some(crate::state::Improvement {
+        g.tile_mut(i).improvement = Some(crate::state::Improvement {
             kind,
             owner: 0,
             founder: player,
@@ -259,7 +259,7 @@ pub fn build(
         }
         if has(d, "patina") {
             let level = level_for(g, t, i)?;
-            g.tiles[i].improvement.as_mut().unwrap().level = level;
+            g.tile_mut(i).improvement.as_mut().unwrap().level = level;
         }
         let amount = improvement_score(t, g, i);
         if amount > 0 {
@@ -277,7 +277,7 @@ pub fn build(
             .is_some_and(|j| ![1, 2].contains(&g.tiles[j].terrain))
         };
         let horizontal = !(anchor(0, -1) && anchor(0, 1)) && anchor(1, 0) && anchor(-1, 0);
-        g.tiles[i]
+        g.tile_mut(i)
             .improvement
             .as_mut()
             .ok_or("bridge without its improvement")?
@@ -335,8 +335,8 @@ pub fn build(
     }
     for e in &d.creates {
         if let Some(n) = e["terrain"].as_str() {
-            g.tiles[i].terrain = t.terrain.id(n)? as i32;
-            g.tiles[i].resource = None;
+            g.tile_mut(i).terrain = t.terrain.id(n)? as i32;
+            g.tile_mut(i).resource = None;
         }
         if let Some(n) = e["resource"].as_str() {
             // created unless the player already sees a resource there
@@ -382,7 +382,7 @@ pub fn build(
                     show_popup: false,
                 }));
             }
-            let u = &mut g.units[n as usize];
+            let u = g.unit_mut(n as usize);
             u.moved = true;
             u.attacked = true;
         }
@@ -439,7 +439,7 @@ pub fn destroy(
         }
         for r in &d.terrain_requirements {
             if let Some(n) = r["resource"].as_str() {
-                g.tiles[i].resource = Some(t.resources.id(n)? as i32);
+                g.tile_mut(i).resource = Some(t.resources.id(n)? as i32);
             }
         }
         if !d.routes.is_empty() || has(d, "bridge") {
@@ -448,10 +448,10 @@ pub fn destroy(
                 actor: player,
                 players: Seats::from_iter([player]),
             });
-            g.tiles[i].has_road = false;
+            g.tile_mut(i).has_road = false;
         }
     }
-    g.tiles[i].improvement = None;
+    g.tile_mut(i).improvement = None;
     let buffered = out.len();
     surrounding(g, t, player, c, out)?;
     crate::step::buffered_last(out, start, buffered);
@@ -498,7 +498,7 @@ pub fn economy_action(
         "Build" => build(g, t, player, kind, c, pay, out),
         "BuildRoad" => {
             let i = g.index(c).ok_or("road tile")?;
-            g.tiles[i].has_road = true;
+            g.tile_mut(i).has_road = true;
             Ok(())
         }
         "DestroyResource" => {
@@ -507,14 +507,14 @@ pub fn economy_action(
                 return Ok(());
             }
             surrounding(g, t, player, c, out)?;
-            g.tiles[i].resource = None;
+            g.tile_mut(i).resource = None;
             Ok(())
         }
         "CreateResource" => {
             let Some(i) = g.index(c) else {
                 return Ok(());
             };
-            g.tiles[i].resource = Some(kind);
+            g.tile_mut(i).resource = Some(kind);
             surrounding(g, t, player, c, out)
         }
         "ImprovementLevelUp" | "ImprovementLevelDown" => {
@@ -528,7 +528,7 @@ pub fn economy_action(
                 return Ok(());
             }
             let amount = if down { amount } else { 1 };
-            let m = g.tiles[i].improvement.as_mut().unwrap();
+            let m = g.tile_mut(i).improvement.as_mut().unwrap();
             if down && m.level == 0 {
                 return Ok(());
             }
@@ -597,7 +597,7 @@ pub fn city_action(
         "IncreasePopulation" | "DecreasePopulation" => {
             let up = inner == "IncreasePopulation";
             let before = improvement_score(t, g, i);
-            let m = g.tiles[i].improvement.as_mut().unwrap();
+            let m = g.tile_mut(i).improvement.as_mut().unwrap();
             m.xp += if up { 1 } else { -1 };
             m.population += if up { 1 } else { -1 };
             let after = improvement_score(t, g, i);
@@ -616,7 +616,7 @@ pub fn city_action(
             }
         }
         "LevelUp" => {
-            let m = g.tiles[i].improvement.as_mut().unwrap();
+            let m = g.tile_mut(i).improvement.as_mut().unwrap();
             if m.level >= m.xp {
                 return Ok(());
             }

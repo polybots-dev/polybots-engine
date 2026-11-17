@@ -64,7 +64,7 @@ typedef struct {
     int8_t has_improvement_n, has_resource_n, resource_n;
     int8_t has_road_n, has_route_n, has_continent_n, had_route_n, skin_n;
     int8_t effects_len_n, effects_n[5];
-    int8_t pad;
+    uint8_t explorers_mask_n; /* the explorers as bits (ef_explorer_bit), kept with explorers_n */
 } EfTile;
 
 /* narrowed: ids stay 32 bits (they grow through a game); slots, health, xp

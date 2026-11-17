@@ -149,7 +149,8 @@ pub struct EfTile {
     pub skin_n: i8,
     pub effects_len_n: i8,
     pub effects_n: [i8; 5],
-    pub pad: i8,
+    /// the explorers as bits (kernel/query.h ef_explorer_bit), kept with `explorers_n`
+    pub explorers_mask_n: u8,
 }
 
 #[repr(C)]
@@ -389,6 +390,11 @@ impl Block {
         b.tile_cap = tile_cap;
         b.unit_cap = unit_cap;
         b
+    }
+
+    /// The block's words, padding included.
+    pub fn words(&self) -> &[u64] {
+        &self.words
     }
 
     /// The block's bytes, padding included (zero, as `new` leaves them).
@@ -767,6 +773,15 @@ fn fit_list<T: Copy + Into<i64>, U: TryFrom<i64>, const N: usize>(
     Ok(from.len() as i8)
 }
 
+/// kernel/query.h ef_explorer_bit: ids 0 to 6 their own bit, Nature (255) bit 7, others none
+fn explorer_bit(id: i32) -> u8 {
+    match id {
+        255 => 0x80,
+        0..=6 => 1 << id,
+        _ => 0,
+    }
+}
+
 fn tile_to(t: &Tile, d: &mut EfTile, r: &Reached) -> Result<(), String> {
     d.coordinates = xy(t.coordinates);
     d.terrain_n = fit(t.terrain, "terrain")?;
@@ -775,6 +790,7 @@ fn tile_to(t: &Tile, d: &mut EfTile, r: &Reached) -> Result<(), String> {
     d.owner_n = fit(t.owner, "tile owner")?;
     d.capital_of_n = fit(t.capital_of, "capital of")?;
     d.explorers_len_n = fit_list(&t.explorers, &mut d.explorers_n, "explorer")?;
+    d.explorers_mask_n = t.explorers.iter().fold(0u8, |m, &id| m | explorer_bit(id));
     d.ruling_city = xy(t.ruling_city);
     d.has_improvement_n = i8::from(t.improvement.is_some());
     if let Some(m) = &t.improvement {
@@ -1014,8 +1030,8 @@ pub fn from_device(d: &Block, template: &Game) -> Result<Game, String> {
     let naming_next = count(d.naming_next, naming_count, "naming seed position")?;
     let mut game = Game {
         width: d.width,
-        tiles,
-        units,
+        tiles: tiles.into(),
+        units: units.into(),
         players,
         current_turn: d.current_turn,
         current_player_index: d.current_player_index,
@@ -1030,7 +1046,7 @@ pub fn from_device(d: &Block, template: &Game) -> Result<Game, String> {
             .map(crate::action::from_device)
             .collect::<Result<_, _>>()?,
         triggers,
-        effect_lists,
+        effect_lists: effect_lists.into(),
         memory: template.memory.clone(),
         seeds: Seeds {
             gameplay_seed: d.gameplay_seed,
@@ -1260,7 +1276,7 @@ pub fn canonical(g: &Game) -> Result<Game, String> {
             }
         })
         .collect();
-    for tile in &mut out.tiles {
+    for tile in out.tiles_mut() {
         tile.unit = tile.unit.map(|n| r.unit_of[&n] as u32);
     }
     Ok(out)

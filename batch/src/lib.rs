@@ -101,6 +101,8 @@ struct Slot {
     offered: Vec<Cand>,
     moves: Vec<Move>,
     view: View,
+    /// what `view` was last written from, so the next write redoes only changed tiles
+    view_kept: view::Kept,
 }
 
 pub struct Batch {
@@ -160,7 +162,7 @@ impl Slot {
             return Ok(());
         }
         let mover = g.players[g.current_player_index as usize].action.id;
-        view::write(g, t, mover, &mut self.view)?;
+        view::write_kept(g, t, mover, &mut self.view, &mut self.view_kept)?;
         self.offered = menu::menu(g, t)?;
         // a player to move always has a move; a game without one could never go on
         if self.offered.is_empty() {

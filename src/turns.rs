@@ -72,19 +72,28 @@ pub fn end_command(g: &mut Game, t: &Tables, p: i32, out: &mut Vec<Action>) -> R
                 if ability(t, u.kind, "grow") {
                     grow(g, t, p, c, &u, out)?;
                 }
-                let m = &mut g.units[n as usize];
+                let m = g.unit_mut(n as usize);
                 m.moved = false;
                 m.attacked = false;
                 m.previous_turn_end_coordinates = m.coordinates;
                 let list = m.effects as usize;
-                let e = g.effect_lists.get_mut(list).ok_or("effect list")?;
-                for x in [FROZEN, PETRIFIED] {
-                    if let Some(k) = e.iter().position(|v| *v == x) {
-                        e.remove(k);
+                // the list is written (and its holders stamped, a scan of the board) only when
+                // it changes
+                let double = ability(t, u.kind, "doubleattack");
+                let now = g.effect_lists.get(list).ok_or("effect list")?;
+                let changes = now.contains(&FROZEN)
+                    || now.contains(&PETRIFIED)
+                    || double && !now.contains(&DOUBLE_READY);
+                if changes {
+                    let e = g.effects_mut(list).ok_or("effect list")?;
+                    for x in [FROZEN, PETRIFIED] {
+                        if let Some(k) = e.iter().position(|v| *v == x) {
+                            e.remove(k);
+                        }
                     }
-                }
-                if ability(t, u.kind, "doubleattack") && !e.contains(&DOUBLE_READY) {
-                    e.try_push(DOUBLE_READY)?;
+                    if double && !e.contains(&DOUBLE_READY) {
+                        e.try_push(DOUBLE_READY)?;
+                    }
                 }
             }
         }
@@ -310,8 +319,14 @@ pub fn end_turn(g: &mut Game, p: i32, out: &mut Vec<Action>) -> Result<(), Strin
         out.push(Action::TurnEffect(TurnEffect::PassPlayer { player: next }));
     }
     // remove the robbed effect from the ending player's improvements
-    for x in g.tiles.iter_mut().filter(|x| x.owner == p) {
-        if let Some(e) = x.improvement.as_mut().map(|m| &mut m.effects) {
+    for i in 0..g.tiles.len() {
+        let x = &g.tiles[i];
+        let robbed = x.owner == p
+            && x.improvement
+                .as_ref()
+                .is_some_and(|m| m.effects.contains(&1));
+        if robbed {
+            let e = &mut g.tile_mut(i).improvement.as_mut().unwrap().effects;
             if let Some(k) = e.iter().position(|&v| v == 1) {
                 e.remove(k);
             }

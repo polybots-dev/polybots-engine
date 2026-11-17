@@ -349,8 +349,9 @@ pub struct Memory {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Game {
     pub width: i32,
-    pub tiles: Vec<Tile>,
-    pub units: Vec<Unit>,
+    /// written through `Game::tile_mut` and the other accessors in board.rs
+    pub tiles: crate::board::Tiles,
+    pub units: crate::board::Written<Unit>,
     pub players: Vec<Player>,
     pub current_turn: i32,
     pub current_player_index: i32,
@@ -371,7 +372,7 @@ pub struct Game {
     /// pending choices, oldest first
     pub triggers: Vec<Trigger>,
     /// unit_graph.effect_lists: a unit's effects by its `effects` index (list 0 is the empty one)
-    pub effect_lists: Vec<Inline<i64, 9>>,
+    pub effect_lists: crate::board::Written<Inline<i64, 9>>,
     /// per viewer, the enemy units it last saw, by tile index (absent in a checkpoint without the key)
     pub memory: Arc<Memory>,
     pub seeds: Seeds,
@@ -617,8 +618,8 @@ impl Game {
         }
         Ok(Game {
             width,
-            tiles,
-            units,
+            tiles: tiles.into(),
+            units: units.into(),
             players,
             current_turn,
             current_player_index,
@@ -630,7 +631,7 @@ impl Game {
             commands,
             actions,
             triggers,
-            effect_lists,
+            effect_lists: effect_lists.into(),
             memory: Arc::new(Memory { sightings, history }),
             seeds,
             naming_seeds,
@@ -658,7 +659,7 @@ impl Game {
 
     /// Give the city on tile `i` its name.
     pub(crate) fn name_city(&mut self, i: usize, name: String) {
-        if let Some(m) = &mut self.tiles[i].improvement {
+        if let Some(m) = &mut self.tile_mut(i).improvement {
             m.named = !name.is_empty();
         }
         Arc::make_mut(&mut self.side).names[i] = Some(name);

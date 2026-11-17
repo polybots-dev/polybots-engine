@@ -36,11 +36,11 @@ pub(crate) fn floodable(t: &Tile) -> bool {
 pub(crate) fn flood_tile(g: &mut Game, actor: i32, c: Xy) -> Result<(), String> {
     let i = g.index(c).ok_or("flood tile")?;
     if !g.tiles[i].effects.contains(&FLOODED) {
-        g.tiles[i].effects.try_push(FLOODED)?;
+        g.tile_mut(i).effects.try_push(FLOODED)?;
     }
     let p = player_index(g, actor)?;
     if g.players[p].skin == SWAMP_SKIN && !g.tiles[i].effects.contains(&SWAMPED) {
-        g.tiles[i].effects.try_push(SWAMPED)?;
+        g.tile_mut(i).effects.try_push(SWAMPED)?;
     }
     Ok(())
 }
@@ -49,7 +49,7 @@ pub(crate) fn flood_tile(g: &mut Game, actor: i32, c: Xy) -> Result<(), String> 
 pub(crate) fn drain_tile(g: &mut Game, c: Xy) -> Result<(), String> {
     let i = g.index(c).ok_or("drain tile")?;
     let swamp = g.tiles[i].skin == SWAMP_SKIN;
-    let effects = &mut g.tiles[i].effects;
+    let effects = &mut g.tile_mut(i).effects;
     for e in [ALGAE, FLOODED].into_iter().chain(swamp.then_some(SWAMPED)) {
         if let Some(k) = effects.iter().position(|&v| v == e) {
             effects.remove(k);
@@ -112,7 +112,7 @@ pub(crate) fn bubble(g: &mut Game, unit: u32, add: bool) -> Result<(), String> {
         return Ok(());
     };
     let list = g.units[n as usize].effects as usize;
-    let fx = g.effect_lists.get_mut(list).ok_or("effect list")?;
+    let fx = g.effects_mut(list).ok_or("effect list")?;
     match fx.iter().position(|&e| e == BUBBLE) {
         None if add => fx.try_push(BUBBLE)?,
         Some(k) if !add => {
@@ -175,7 +175,7 @@ pub(crate) fn clear_tile_effect(
     out: &mut Vec<Action>,
 ) -> Result<(), String> {
     let i = g.index(c).ok_or("clear effect tile")?;
-    let effects = &mut g.tiles[i].effects;
+    let effects = &mut g.tile_mut(i).effects;
     if let Some(k) = effects.iter().position(|&e| e == effect) {
         effects.remove(k);
     }
@@ -213,9 +213,9 @@ const FROZEN: i64 = 0;
 /// Tentacle update: every tile loses its first Tentacle effect, then each tile next
 /// to an unfrozen Tentacles unit gains one
 pub(crate) fn update_tentacles(g: &mut Game, t: &Tables) -> Result<(), String> {
-    for x in &mut g.tiles {
-        if let Some(k) = x.effects.iter().position(|&e| e == TENTACLE) {
-            x.effects.remove(k);
+    for i in 0..g.tiles.len() {
+        if let Some(k) = g.tiles[i].effects.iter().position(|&e| e == TENTACLE) {
+            g.tile_mut(i).effects.remove(k);
         }
     }
     let mut affected = Vec::new();
@@ -241,7 +241,7 @@ pub(crate) fn update_tentacles(g: &mut Game, t: &Tables) -> Result<(), String> {
     }
     for i in affected {
         if !g.tiles[i].effects.contains(&TENTACLE) {
-            g.tiles[i].effects.try_push(TENTACLE)?;
+            g.tile_mut(i).effects.try_push(TENTACLE)?;
         }
     }
     Ok(())

@@ -43,7 +43,7 @@ EF_FN EfResult ef_build_validation_writes(EfGame *g, const EfTables *t, int32_t 
     const EfTile *tile = ef_tile_c(g, c);
     if (!tile) return ef_err(EF_ERR_BUILD_TILE, 0);
     int32_t terrain = tile->terrain_n;
-    int explored = ef_contains_u8(tile->explorers_n, tile->explorers_len_n, p);
+    int explored = ef_tile_explored(tile, p);
     if (tile->unit_n != EF_NONE && explored && ef_cunits(g)[tile->unit_n].owner_n != p) {
         int32_t o = ef_cunits(g)[tile->unit_n].owner_n;
         int i;
@@ -817,7 +817,7 @@ EF_BIG EfResult ef_execute_action(EfGame *g, const EfTables *t, const EfAction *
             for (int32_t y = center.y - 1; y <= center.y + 1; y++) {
                 EfXy at = ef_xy(x, y);
                 const EfTile *tile = ef_tile_c(g, at);
-                if (!ef_xy_eq(at, center) && tile && !ef_contains_u8(tile->explorers_n, tile->explorers_len_n, p))
+                if (!ef_xy_eq(at, center) && tile && !ef_tile_explored(tile, p))
                     EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, p, at)));
             }
         }
@@ -872,7 +872,7 @@ EF_BIG EfResult ef_execute_action(EfGame *g, const EfTables *t, const EfAction *
                     EfXy s = g->players[o].start_tile;
                     const EfTile *st = ef_tile_c(g, s);
                     if (!st) return ef_err(EF_ERR_CAPITAL_OFF_BOARD, 0);
-                    if (!ef_contains_u8(st->explorers_n, st->explorers_len_n, p)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, p, s)));
+                    if (!ef_tile_explored(st, p)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, p, s)));
                 }
             }
         }

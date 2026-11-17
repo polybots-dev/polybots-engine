@@ -436,7 +436,7 @@ EF_FN EfResult ef_task_completed(EfGame *g, const EfTables *t, int i, int n, int
     case EF_TASK_EXPLORER: {
         int explored = 0;
         for (int k = 0; k < g->tile_count; k++)
-            explored += id == EF_NATURE || ef_contains_u8(ef_ctiles(g)[k].explorers_n, ef_ctiles(g)[k].explorers_len_n, id);
+            explored += id == EF_NATURE || ef_tile_explored(&ef_ctiles(g)[k], id);
         task->has_explored_tiles = 1;
         task->explored_tiles = explored;
         d = explored >= g->tile_count;
@@ -449,7 +449,7 @@ EF_FN EfResult ef_task_completed(EfGame *g, const EfTables *t, int i, int n, int
         int count = 0;
         for (int k = 0; k < 4; k++) {
             const EfTile *c = ef_tile_c(g, corners[k]);
-            count += c && (id == EF_NATURE || ef_contains_u8(c->explorers_n, c->explorers_len_n, id));
+            count += c && (id == EF_NATURE || ef_tile_explored(c, id));
         }
         d = count == 4;
         break;

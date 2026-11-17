@@ -24,9 +24,7 @@ const KILLER_TASK: usize = 5;
 
 fn effects_mut(g: &mut Game, node: u32) -> Result<&mut crate::inline::Inline<i64, 9>, String> {
     let list = g.units[node as usize].effects as usize;
-    g.effect_lists
-        .get_mut(list)
-        .ok_or_else(|| "effect list".into())
+    g.effects_mut(list).ok_or_else(|| "effect list".into())
 }
 
 fn remove_effect(g: &mut Game, node: u32, effect: i64) -> Result<(), String> {
@@ -209,8 +207,8 @@ pub fn attack_command(
             origin: u.coordinates,
             target,
         }));
-        g.units[node as usize].moved = true;
-        g.units[node as usize].attacked = true;
+        g.unit_mut(node as usize).moved = true;
+        g.unit_mut(node as usize).attacked = true;
         let owner = g.tile(target).ok_or("infiltrate target")?.owner;
         attack_diplomacy(g, p, owner, out)?;
         return Ok(());
@@ -266,11 +264,11 @@ pub fn attack_command(
         let at = if advance { target } else { u.coordinates };
         moved = g.tile(at).ok_or("skate attack tile")?.terrain != ICE;
     }
-    g.units[node as usize].moved = moved;
+    g.unit_mut(node as usize).moved = moved;
     if crate::menu::unit_effect_list(g, u.effects).contains(&DOUBLE_READY) {
         remove_effect(g, node, DOUBLE_READY)?;
     } else {
-        g.units[node as usize].attacked = true;
+        g.unit_mut(node as usize).attacked = true;
     }
     if killed && has(t, &u, "persist")? {
         // Persist: another target in range from where the unit ends up keeps it able to attack
@@ -278,7 +276,7 @@ pub fn attack_command(
         let sight = 1 + i32::from(has(t, &u, "scout")?);
         let targets = options_at(g, t, p, position, range, range <= sight, &u, false)?;
         if targets.iter().any(|&c| c != target) {
-            g.units[node as usize].attacked = false;
+            g.unit_mut(node as usize).attacked = false;
         }
     }
     if has(t, &u, "freeze")? {
@@ -397,8 +395,8 @@ pub(crate) fn reset_peace(g: &mut Game, i: usize) {
 
 fn set_direction(g: &mut Game, node: u32, from: Xy, to: Xy) {
     let d = facing_direction(from, to);
-    g.units[node as usize].direction = d;
-    g.units[node as usize].flipped = d < 4;
+    g.unit_mut(node as usize).direction = d;
+    g.unit_mut(node as usize).flipped = d < 4;
 }
 
 /// The Combat Attack action
@@ -433,7 +431,7 @@ pub fn perform_attack(
         let signed = snapshot.health as i16;
         let dealt = damage.min(i32::from(signed)) as i16;
         let health = signed.wrapping_sub(dealt) as u16;
-        g.units[d as usize].health = i32::from(health);
+        g.unit_mut(d as usize).health = i32::from(health);
         if health == 0 {
             if snapshot.owner != 255 {
                 let ai = actor_index.ok_or("attack killer missing")?;
@@ -445,7 +443,7 @@ pub fn perform_attack(
                             && !data(t, &su)?.hidden
                             && !has(t, &su, "static")?
                         {
-                            g.units[s as usize].xp += 1;
+                            g.unit_mut(s as usize).xp += 1;
                             if g.records_achievements() {
                                 return Err("achievement tracking not implemented".into());
                             }
@@ -506,12 +504,12 @@ pub fn perform_attack(
 pub fn kill(g: &mut Game, t: &Tables, c: Xy, out: &mut Vec<Action>) -> Result<(), String> {
     let i = g.index(c).ok_or("kill tile")?;
     let n = g.tiles[i].unit.ok_or("kill with no unit")?;
-    g.units[n as usize].health = 0;
+    g.unit_mut(n as usize).health = 0;
     let u = g.units[n as usize];
     // the follower of a dead head takes its flags and grows into a centipede; the leader lets go
     if u.follower != 0 {
         if let Some(f) = crate::linked::find(g, u.follower) {
-            let fu = &mut g.units[f as usize];
+            let fu = g.unit_mut(f as usize);
             fu.moved = u.moved;
             fu.attacked = u.attacked;
             out.push(Action::Combat(Combat::Upgrade {
@@ -524,14 +522,14 @@ pub fn kill(g: &mut Game, t: &Tables, c: Xy, out: &mut Vec<Action>) -> Result<()
     }
     if u.leader != 0 {
         if let Some(l) = crate::linked::find(g, u.leader) {
-            g.units[l as usize].follower = 0;
+            g.unit_mut(l as usize).follower = 0;
         }
     }
     if crate::menu::unit_effect_list(g, u.effects).contains(&1) {
         crate::cymanti::spores(g, t, c, out)?;
     }
     let score = crate::units::unit_score(g, t, &u);
-    g.tiles[i].unit = None;
+    g.set_unit_at(i, None);
     out.push(Action::Combat(Combat::DecreaseScore {
         player: u.owner,
         amount: score,
@@ -589,22 +587,22 @@ pub fn convert(
         }
     }
     let escape = has(t, &converter, "escape")?;
-    g.units[source as usize].moved = !escape;
-    g.units[source as usize].attacked = true;
-    let u = &mut g.units[id as usize];
+    g.unit_mut(source as usize).moved = !escape;
+    g.unit_mut(source as usize).attacked = true;
+    let u = g.unit_mut(id as usize);
     u.owner = converter.owner;
     u.moved = true;
     u.attacked = true;
     let passenger = u.passenger;
     if !has(t, &original, "independent")? {
         let capital = crate::step::current_capital(g, g.players[p].action.id)?;
-        g.units[id as usize].home = capital;
+        g.unit_mut(id as usize).home = capital;
         if let Some(n) = passenger {
-            g.units[n as usize].owner = converter.owner;
-            g.units[n as usize].home = capital;
+            g.unit_mut(n as usize).owner = converter.owner;
+            g.unit_mut(n as usize).home = capital;
         }
     } else if let Some(n) = passenger {
-        g.units[n as usize].owner = converter.owner;
+        g.unit_mut(n as usize).owner = converter.owner;
     }
     let score = crate::units::unit_score(g, t, &g.units[id as usize]);
     out.push(Action::Payload(Payload::IncreaseScore {

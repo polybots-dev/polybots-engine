@@ -54,7 +54,7 @@ pub fn city_reward(
     if g.tiles[i].improvement.is_none() || player_index(g, p).is_err() {
         return Ok(());
     }
-    g.tiles[i]
+    g.tile_mut(i)
         .improvement
         .as_mut()
         .unwrap()
@@ -96,7 +96,7 @@ pub fn city_reward(
         }
         5 => {
             // construct border growth: widen the border now, then expand, route, connect
-            let m = g.tiles[i].improvement.as_mut().unwrap();
+            let m = g.tile_mut(i).improvement.as_mut().unwrap();
             m.border_size += 1;
             let others: crate::inline::Seats<i32> = g
                 .players
@@ -156,7 +156,8 @@ pub fn city_reward(
 /// ModifyProduction / ModifyScore on the target improvement
 pub fn modify(g: &mut Game, inner: &str, target: Xy, amount: i32) -> Result<(), String> {
     let i = g.index(target).ok_or("modify tile")?;
-    let m = g.tiles[i]
+    let m = g
+        .tile_mut(i)
         .improvement
         .as_mut()
         .ok_or("modify without an improvement")?;
@@ -209,8 +210,8 @@ pub fn expand_city(
             source: g.tiles[i].coordinates,
             delay: 100,
         }));
-        g.tiles[i].owner = actor;
-        g.tiles[i].ruling_city = city;
+        g.tile_mut(i).owner = actor;
+        g.tile_mut(i).ruling_city = city;
         claimed.push(i);
     }
     for i in claimed {

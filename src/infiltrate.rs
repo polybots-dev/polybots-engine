@@ -261,7 +261,7 @@ pub fn reward(
             amount: raw_production(g, t, city)?,
         }));
     }
-    let effects = &mut g.tiles[ci].improvement.as_mut().unwrap().effects;
+    let effects = &mut g.tile_mut(ci).improvement.as_mut().unwrap().effects;
     if !effects.contains(&1) {
         effects.push(1);
     }

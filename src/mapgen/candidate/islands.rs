@@ -179,7 +179,7 @@ impl Candidate<'_> {
         }
         self.continents = seeds.iter().map(|_| fresh_continent()).collect();
         for (id, &i) in seeds.iter().enumerate() {
-            let tile = &mut self.g.tiles[i as usize];
+            let tile = self.g.tile_mut(i as usize);
             tile.continent = Some(id as i32);
             tile.altitude = 1;
             tile.terrain = FIELD;
@@ -267,7 +267,7 @@ impl Candidate<'_> {
                 }
             }
             if let Some(chosen) = best {
-                let tile = &mut self.g.tiles[chosen];
+                let tile = self.g.tile_mut(chosen);
                 tile.continent = Some(id as i32);
                 tile.altitude = 1;
                 tile.terrain = FIELD;
@@ -337,7 +337,7 @@ impl Candidate<'_> {
                 {
                     continue;
                 }
-                set_tile_as_city(&mut self.g.tiles[i]);
+                set_tile_as_city(self.g.tile_mut(i));
                 return Ok(!forced);
             }
         }
@@ -418,8 +418,8 @@ impl Candidate<'_> {
             return Ok(false);
         };
         let i = self.g.index(site).ok_or("island capital off the map")?;
-        set_tile_as_city(&mut self.g.tiles[i]);
-        self.g.tiles[i].owner = player;
+        set_tile_as_city(self.g.tile_mut(i));
+        self.g.tile_mut(i).owner = player;
         capitals.push(site);
         Ok(true)
     }
@@ -452,7 +452,7 @@ impl Candidate<'_> {
                 .ok_or("provisional site off the map")?;
             if let Some(continent) = self.g.tiles[i].continent {
                 let id = self.g.tiles[i].owner;
-                self.g.tiles[i].owner = 0;
+                self.g.tile_mut(i).owner = 0;
                 let at = sites
                     .iter()
                     .position(|&c| c == original)
@@ -491,13 +491,13 @@ impl Candidate<'_> {
             }
             let from = current.ok_or("missing preferred island owner")?;
             let to = best.ok_or("empty island capital list")?;
-            self.g.tiles[from].owner = self.g.tiles[to].owner;
-            self.g.tiles[to].owner = id;
+            self.g.tile_mut(from).owner = self.g.tiles[to].owner;
+            self.g.tile_mut(to).owner = id;
         }
         for site in sites {
             let i = self.g.index(site).ok_or("island capital off the map")?;
             let id = self.g.tiles[i].owner;
-            self.g.tiles[i].owner = 0;
+            self.g.tile_mut(i).owner = 0;
             set_tile_as_capital(self.g, self.t, id, site, actions)?;
         }
         Ok(())
@@ -513,7 +513,7 @@ impl Candidate<'_> {
     ) -> Result<bool, String> {
         let ids = self.players();
         let radius = min_capital_distance(self.side(), ids.len() as u8).map_err(error)? - 1;
-        for tile in &mut self.g.tiles {
+        for tile in self.g.tiles_mut() {
             tile.improvement = None;
             tile.owner = 0;
         }
@@ -525,9 +525,10 @@ impl Candidate<'_> {
             {
                 index += 1;
             }
-            let Some(tile) = self.g.tiles.get_mut(index) else {
+            if index >= self.g.tiles.len() {
                 return Ok(false);
-            };
+            }
+            let tile = self.g.tile_mut(index);
             set_tile_as_city(tile);
             tile.owner = id;
             sites.push(tile.coordinates);
@@ -563,7 +564,7 @@ impl Candidate<'_> {
             if area(self.g, c, 2).any(|j| is_city(&self.g.tiles[j])) {
                 continue;
             }
-            set_tile_as_city(&mut self.g.tiles[i]);
+            set_tile_as_city(self.g.tile_mut(i));
             placed += 1;
             if placed >= target {
                 break;

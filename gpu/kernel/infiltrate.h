@@ -67,7 +67,7 @@ EF_FN EfResult ef_visible_resource(EfGame *g, const EfTables *t, int32_t p, EfXy
     *out = 0;
     const EfTile *tile = ef_tile_c(g, c);
     if (!tile) return ef_err(EF_ERR_RESOURCE_TILE, 0);
-    if ((p != EF_NATURE && !ef_contains_u8(tile->explorers_n, tile->explorers_len_n, p)) || tile->has_improvement_n) return ef_ok();
+    if ((p != EF_NATURE && !ef_tile_explored(tile, p)) || tile->has_improvement_n) return ef_ok();
     if (!tile->has_resource_n) return ef_ok();
     return ef_resource_revealed(g, t, p, tile->resource_n, out);
 }

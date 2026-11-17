@@ -114,7 +114,7 @@ EF_BIG EfResult ef_view_write(const EfGame *g, const EfTables *t, int32_t viewer
 #define EF_PLANE(p) (tiles[(p) * n + i])
     for (int i = 0; i < n; i++) {
         const EfTile *x = &ef_ctiles(g)[i];
-        if (!ef_contains_u8(x->explorers_n, x->explorers_len_n, viewer)) {
+        if (!ef_tile_explored(x, viewer)) {
             EF_PLANE(EF_P_EXPLORED) = 0;
             EF_PLANE(EF_P_RUIN_HINT) = (int16_t)(rainbow && x->has_improvement_n && x->improvement.kind_n == EF_RUIN);
             continue;
@@ -239,7 +239,7 @@ EF_BIG EfResult ef_view_write(const EfGame *g, const EfTables *t, int32_t viewer
             const EfTile *x = &ef_ctiles(g)[i];
             int lighthouse = x->has_improvement_n && ef_improvement_known(t, x->improvement.kind_n)
                              && t->improvements[x->improvement.kind_n].named == EF_NAMED_LIGHTHOUSE;
-            if (!lighthouse || !ef_contains_u8(x->explorers_n, x->explorers_len_n, viewer)) continue;
+            if (!lighthouse || !ef_tile_explored(x, viewer)) continue;
             EfLighthouseView v;
             v.tile = ef_i16(i);
             int e = 0;

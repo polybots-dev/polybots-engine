@@ -394,7 +394,7 @@ EF_BIG EfResult ef_tribe_connection(EfGame *g, int i) {
     if (p == EF_NATURE || g->players[i].known_players_len >= others) return ef_ok();
     for (int n = 0; n < g->tile_count; n++) {
         const EfTile *tile = &ef_ctiles(g)[n];
-        if (!ef_contains_u8(tile->explorers_n, tile->explorers_len_n, p)) continue;
+        if (!ef_tile_explored(tile, p)) continue;
         EfXy c = tile->coordinates;
         int32_t tile_owner = tile->owner_n, tile_unit = tile->unit_n;
         int city = tile->has_improvement_n && tile->improvement.kind_n == EF_CITY;
@@ -527,7 +527,7 @@ EF_BIG EfResult ef_start_turn(EfGame *g, const EfTables *t, int32_t p) {
             EfXy start = g->players[o].start_tile;
             const EfTile *s = ef_tile_c(g, start);
             if (!s) return ef_err(EF_ERR_CAPITAL_TILE_PLAIN, 0);
-            if (!ef_contains_u8(s->explorers_n, s->explorers_len_n, p)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, p, start)));
+            if (!ef_tile_explored(s, p)) EF_TRY(ef_push(g, ef_action_at(EF_A_EXPLORE, p, start)));
         }
     }
     return ef_ok();

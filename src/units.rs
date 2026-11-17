@@ -88,10 +88,7 @@ pub(crate) fn create_unit(
     };
     let data = t.units.get(kind as usize).ok_or("unknown unit kind")?;
     g.current_unit_id = g.current_unit_id.wrapping_add(1);
-    let effects = {
-        g.effect_lists.push(Default::default());
-        (g.effect_lists.len() - 1) as u32
-    };
+    let effects = g.push_effects(Default::default());
     let unit = Unit {
         id: g.current_unit_id,
         leader: 0,
@@ -115,19 +112,18 @@ pub(crate) fn create_unit(
         birth_climate: climate,
         birth_climate_skin: skin,
     };
-    let node = g.units.len() as u32;
-    g.units.push(unit);
+    let node = g.push_unit(unit);
     if has(t, kind, "carry")? {
         let passenger = create_unit(g, t, player, WARRIOR, c, out)?;
         let health = g.units[passenger as usize].health;
         let protect = has(t, kind, "protect")?;
-        let v = &mut g.units[node as usize];
+        let v = g.unit_mut(node as usize);
         v.passenger = Some(passenger);
         if !protect {
             v.health = health;
         }
     }
-    g.tiles[i].unit = Some(node);
+    g.set_unit_at(i, Some(node));
     // The step-on-poison check for the new unit: a poison improvement poisons it, unless its
     // trainer's tribe resists or it flies (the trainer's tribe, as the game reads it)
     if let Some(m) = &g.tiles[i].improvement {
@@ -185,8 +181,8 @@ pub fn train(
     let node = create_unit(g, t, player, kind, c, out)?;
     if facing_target != NULL {
         let d = crate::step::facing_direction(c, facing_target);
-        g.units[node as usize].direction = d;
-        g.units[node as usize].flipped = d < 4;
+        g.unit_mut(node as usize).direction = d;
+        g.unit_mut(node as usize).flipped = d < 4;
     }
     let amount = unit_score(g, t, &g.units[node as usize]);
     if has(t, kind, "tentacles")? {
@@ -227,7 +223,7 @@ pub fn embark(
     let new = create_unit(g, t, player, vehicle, c, out)?;
     let protect = has(t, vehicle, "protect")?;
     let p = g.units[old as usize];
-    let v = &mut g.units[new as usize];
+    let v = g.unit_mut(new as usize);
     if !protect {
         v.health = p.health;
     }
@@ -261,7 +257,7 @@ pub fn disembark(
         return Ok(());
     };
     let protect = has(t, v.kind, "protect")?;
-    let p = &mut g.units[passenger as usize];
+    let p = g.unit_mut(passenger as usize);
     if !protect {
         p.health = v.health;
     }
@@ -270,7 +266,7 @@ pub fn disembark(
     p.moved = true;
     p.attacked = true;
     p.coordinates = c;
-    g.tiles[i].unit = Some(passenger);
+    g.set_unit_at(i, Some(passenger));
     let kind = g.units[passenger as usize].kind;
     if has(t, kind, "grow")? {
         // a Grow passenger older than two turns comes ashore grown, if its tribe can train the
@@ -368,7 +364,7 @@ pub fn upgrade(
     *cur = cur.wrapping_sub(cost).max(0);
     let new = create_unit(g, t, player, kind, c, out)?;
     let old = g.units[original as usize];
-    let n = &mut g.units[new as usize];
+    let n = g.unit_mut(new as usize);
     if old.passenger.is_some() {
         n.passenger = old.passenger;
     }
@@ -387,7 +383,7 @@ pub fn upgrade(
         let missing = crate::combat::max_health(g, t, &old)? - old.health;
         new_health - missing.min(new_health - 1)
     };
-    g.units[new as usize].health = health;
+    g.unit_mut(new as usize).health = health;
     let score = unit_score(g, t, &g.units[new as usize]).wrapping_sub(unit_score(g, t, &old));
     out.push(Action::Payload(Payload::IncreaseScore {
         player,
@@ -403,18 +399,18 @@ pub fn upgrade(
 /// Exhaust a unit: no more moves or attacks, DoubleReady and Boosted removed; every
 /// follower in the chain is spent too (flags only)
 pub(crate) fn make_exhausted(g: &mut Game, node: u32) -> Result<(), String> {
-    g.units[node as usize].moved = true;
-    g.units[node as usize].attacked = true;
+    g.unit_mut(node as usize).moved = true;
+    g.unit_mut(node as usize).attacked = true;
     let list = g.units[node as usize].effects as usize;
-    let e = g.effect_lists.get_mut(list).ok_or("effect list")?;
+    let e = g.effects_mut(list).ok_or("effect list")?;
     for x in [7, 2] {
         if let Some(k) = e.iter().position(|v| *v == x) {
             e.remove(k);
         }
     }
     for f in crate::linked::followers(g, node)? {
-        g.units[f as usize].moved = true;
-        g.units[f as usize].attacked = true;
+        g.unit_mut(f as usize).moved = true;
+        g.unit_mut(f as usize).attacked = true;
     }
     Ok(())
 }
@@ -426,9 +422,9 @@ pub fn promote(g: &mut Game, t: &Tables, c: Xy) -> Result<(), String> {
         .and_then(|t| t.unit)
         .ok_or("promotion with no unit")?;
     let selected = g.units[n as usize].passenger.unwrap_or(n);
-    g.units[selected as usize].promotion_level += 1;
+    g.unit_mut(selected as usize).promotion_level += 1;
     let max = crate::combat::max_health(g, t, &g.units[n as usize].clone())?;
-    g.units[n as usize].health = i32::from(max as u16);
+    g.unit_mut(n as usize).health = i32::from(max as u16);
     Ok(())
 }
 
@@ -620,7 +616,7 @@ mod tests {
                     x: at.x + dx,
                     y: at.y + dy,
                 }) {
-                    g.tiles[i].unit = Some(occupant);
+                    g.set_unit_at(i, Some(occupant));
                 }
             }
             let mut out = Vec::new();

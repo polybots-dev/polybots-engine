@@ -96,10 +96,10 @@ fn a_captured_villages_name_is_the_engines_for_each_skin() {
             let mut u = g.units[capital];
             u.id = 7_000 + seed as u32;
             u.coordinates = g.tiles[v].coordinates;
-            g.units.push(u);
-            g.tiles[v].unit = Some((g.units.len() - 1) as u32);
+            let node = g.push_unit(u);
+            g.set_unit_at(v, Some(node));
             if !g.tiles[v].explorers.contains(&me) {
-                g.tiles[v].explorers.push(me);
+                g.tile_mut(v).explorers.push(me);
             }
             let c = g.tiles[v].coordinates;
             let at = Some(engine_fast_frame::Xy { x: c.x, y: c.y });

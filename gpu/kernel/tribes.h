@@ -122,7 +122,7 @@ EF_FN EfResult ef_freezable(const EfGame *g, int32_t actor, EfXy c, int only_own
     const EfTile *tile = ef_tile_c(g, c);
     if (!tile) return ef_err(EF_ERR_FREEZE_TILE, 0);
     if (only_owned && tile->owner_n != actor) return ef_ok();
-    if (actor != EF_NATURE && !ef_contains_u8(tile->explorers_n, tile->explorers_len_n, actor)) return ef_ok();
+    if (actor != EF_NATURE && !ef_tile_explored(tile, actor)) return ef_ok();
     if (ef_is_water_tile(tile) || ef_flooded(tile)) { *out = 1; return ef_ok(); }
     *writes = 1;
     if (tile->climate_n != ef_climate_of(p) || tile->skin_n != p->skin) { *out = 1; return ef_ok(); }
@@ -757,7 +757,7 @@ EF_FN EfResult ef_attract(EfGame *g, const EfTables *t, int32_t p, EfXy c, int32
             if (t->game_error) return ef_err(EF_ERR_TABLE, t->game_error - 1);
             EfAction a = ef_action_at(EF_A_CREATE_RESOURCE, p, tile->coordinates);
             a.i[0] = t->game;
-            /* the frozen rules123 build records the attraction reason in the queued frame */
+            /* rules version 123 records the attraction reason in the queued frame */
             a.i[1] = g->version == 123;
             return ef_push(g, a);
         }

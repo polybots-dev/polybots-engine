@@ -299,24 +299,24 @@ fn move_action(
     }
     // moved |= (reason != Push and, for an attack advance, the unit lacks Escape)
     if reason == 0 || reason == 1 && !has("escape") {
-        g.units[node as usize].moved = true;
+        g.unit_mut(node as usize).moved = true;
     }
     // a skater that ends off the ice is spent
     if has("skate") && reason != 2 && g.tile(dest).ok_or("move destination")?.terrain != ICE {
-        g.units[node as usize].moved = true;
-        g.units[node as usize].attacked = true;
+        g.unit_mut(node as usize).moved = true;
+        g.unit_mut(node as usize).attacked = true;
     }
     let (from_i, to_i) = (
         g.index(origin).ok_or("move origin")?,
         g.index(dest).ok_or("move destination")?,
     );
-    g.tiles[from_i].unit = None;
-    g.tiles[to_i].unit = Some(node);
-    g.units[node as usize].coordinates = dest;
+    g.set_unit_at(from_i, None);
+    g.set_unit_at(to_i, Some(node));
+    g.unit_mut(node as usize).coordinates = dest;
     if path.len() > 1 {
         let d = facing_direction(path[1], dest);
-        g.units[node as usize].direction = d;
-        g.units[node as usize].flipped = d < 4;
+        g.unit_mut(node as usize).direction = d;
+        g.unit_mut(node as usize).flipped = d < 4;
     }
     out.extend(crate::cymanti::poison_tile(g, t, node, dest));
     refresh_tech_cache(g, t, p)?; // the player-ability query for the bubble check
@@ -720,8 +720,8 @@ fn execute_command(
         Command::HealOthers { coordinates } => {
             base(out, p, 4);
             if let Some(n) = g.tile(coordinates).ok_or("heal-others tile")?.unit {
-                g.units[n as usize].moved = true;
-                g.units[n as usize].attacked = true;
+                g.unit_mut(n as usize).moved = true;
+                g.unit_mut(n as usize).attacked = true;
             }
             out.push(Action::TurnEffect(TurnEffect::HealOthers {
                 player: p,
@@ -808,14 +808,14 @@ fn execute_command(
                         "a Move with no path within the unit's movement: not a legal move",
                     )?)
                 };
-            g.units[node as usize].moved = true;
+            g.unit_mut(node as usize).moved = true;
             out.push(Action::MoveEffect(MoveEffect::Reselect {
                 player: p,
                 unit: id,
             }));
             let Some(path) = path else {
                 // a hidden enemy is there: the move becomes a Reveal
-                g.units[node as usize].moved = false;
+                g.unit_mut(node as usize).moved = false;
                 let origin = g.units[node as usize].coordinates;
                 out.push(Action::MoveEffect(MoveEffect::Reveal {
                     player: p,
@@ -929,8 +929,8 @@ fn execute_command(
         Command::Flood { coordinates } => {
             base(out, p, 37);
             if let Some(n) = g.tile(coordinates).and_then(|x| x.unit) {
-                g.units[n as usize].moved = true;
-                g.units[n as usize].attacked = true;
+                g.unit_mut(n as usize).moved = true;
+                g.unit_mut(n as usize).attacked = true;
             }
             out.push(Action::Combat(Combat::Flood {
                 player: p,
@@ -1136,7 +1136,7 @@ fn heal(g: &mut Game, t: &Tables, c: Xy, fixed: i64) -> Result<(), String> {
         }
         amount.min(max.wrapping_sub(health))
     };
-    g.units[node as usize].health = i32::from(health.wrapping_add(amount).min(max));
+    g.unit_mut(node as usize).health = i32::from(health.wrapping_add(amount).min(max));
     Ok(())
 }
 
@@ -1172,7 +1172,7 @@ fn disband(
     }
     if unit.leader != 0 {
         if let Some(l) = crate::linked::find(g, unit.leader) {
-            g.units[l as usize].follower = 0;
+            g.unit_mut(l as usize).follower = 0;
         }
     }
     if let Some(data) = t.units.get(unit.kind as usize) {
@@ -1197,7 +1197,7 @@ fn disband(
             amount: cost.wrapping_mul(5),
         }));
     }
-    g.tiles[i].unit = None;
+    g.set_unit_at(i, None);
     if t.units
         .get(unit.kind as usize)
         .is_some_and(|d| d.unit_abilities.has("tentacles"))
@@ -1551,14 +1551,14 @@ fn execute_action(
         }) => {
             if let Some(n) = g.tile(c).and_then(|t| t.unit) {
                 let list = g.units[n as usize].effects as usize;
-                let effects = g.effect_lists.get_mut(list).ok_or("effect list")?;
+                let effects = g.effects_mut(list).ok_or("effect list")?;
                 if let Some(k) = effects.iter().position(|e| *e == 3) {
                     effects.remove(k);
                 }
                 if let Some(from) = g.tile(origin).and_then(|t| t.unit) {
                     let d = facing_direction(origin, c);
-                    g.units[from as usize].direction = d;
-                    g.units[from as usize].flipped = d < 4;
+                    g.unit_mut(from as usize).direction = d;
+                    g.unit_mut(from as usize).flipped = d < 4;
                     let target_owner = g.units[n as usize].owner;
                     let other = if target_owner == p {
                         g.units[from as usize].owner
@@ -1576,9 +1576,9 @@ fn execute_action(
         }
         Action::MoveEffect(MoveEffect::Hide { coordinates, .. }) => {
             if let Some(n) = g.tile(coordinates).and_then(|c| c.unit) {
-                g.units[n as usize].attacked = true;
+                g.unit_mut(n as usize).attacked = true;
                 let list = g.units[n as usize].effects as usize;
-                let effects = g.effect_lists.get_mut(list).ok_or("effect list")?;
+                let effects = g.effects_mut(list).ok_or("effect list")?;
                 if !effects.contains(&3) {
                     effects.push(3);
                 }
@@ -1647,8 +1647,8 @@ fn execute_action(
                         get_paid: false,
                     });
                 } else {
-                    g.units[n as usize].moved = true;
-                    g.units[n as usize].attacked = true;
+                    g.unit_mut(n as usize).moved = true;
+                    g.unit_mut(n as usize).attacked = true;
                 }
             }
         }
@@ -1761,10 +1761,10 @@ fn execute_action(
         Action::TurnEffect(TurnEffect::Recover { coordinates, .. }) => {
             if let Some(tile) = g.tile(coordinates) {
                 let node = tile.unit.ok_or("Recover with no unit")?;
-                let u = g
-                    .units
-                    .get_mut(node as usize)
-                    .ok_or("unit node out of range")?;
+                if node as usize >= g.units.len() {
+                    return Err("unit node out of range".into());
+                }
+                let u = g.unit_mut(node as usize);
                 u.moved = true;
                 u.attacked = true;
             }

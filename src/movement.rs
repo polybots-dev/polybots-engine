@@ -68,6 +68,32 @@ struct Profile<'a> {
     mover: &'a Mover,
 }
 
+/// A box of tiles (inclusive coordinates; empty while `x0 > x1`): what a unit's legal rows
+/// read, so that the kept list (`menu_cache`) redoes them only when a tile in it changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reads {
+    pub x0: i32,
+    pub y0: i32,
+    pub x1: i32,
+    pub y1: i32,
+}
+
+impl Reads {
+    pub const NONE: Reads = Reads {
+        x0: i32::MAX,
+        y0: i32::MAX,
+        x1: i32::MIN,
+        y1: i32::MIN,
+    };
+    /// add the tiles within `r` of `c`
+    pub fn add(&mut self, c: Xy, r: i32) {
+        self.x0 = self.x0.min(c.x - r);
+        self.y0 = self.y0.min(c.y - r);
+        self.x1 = self.x1.max(c.x + r);
+        self.y1 = self.y1.max(c.y + r);
+    }
+}
+
 /// What a player's units share in a search (its techs' movement and embark unlocks).
 pub(crate) struct Mover {
     /// terrain kinds unlocked by tech, one bit per terrain id
@@ -370,8 +396,11 @@ impl Profile<'_> {
         (out, n)
     }
 
-    /// Move options: FIFO relaxation; `found` gets each finishable tile on first discovery
-    fn options(&self, range: i32, mut found: impl FnMut(&Tile)) {
+    /// Move options: FIFO relaxation; `found` gets each finishable tile on first discovery.
+    /// `reads` gets every tile the search looks at: an expanded tile's neighbours are checked
+    /// for access and cost, which read their own neighbours (bridge anchors, zone of control),
+    /// so 2 around each expanded tile.
+    fn options(&self, range: i32, reads: &mut Reads, mut found: impl FnMut(&Tile)) {
         let tiles = &self.g.tiles;
         let first = self.index(self.unit.coordinates).unwrap();
         let mut scratch = self.mover.scratch.borrow_mut();
@@ -388,6 +417,7 @@ impl Profile<'_> {
         while head < tail {
             let cur = usize::from(queue[head]);
             head += 1;
+            reads.add(tiles[cur].coordinates, 2);
             let cost = costs[cur];
             let (valid, n) = self.open_neighbours(cur, tiles[cur].coordinates);
             for &next in &valid[..n] {
@@ -480,20 +510,23 @@ pub fn moves_on(
     i: usize,
 ) -> Result<Vec<crate::menu::Cand>, String> {
     let mut out = Vec::new();
-    moves_at(g, t, mover, i, &mut None, &mut out)?;
+    let mut reads = Reads::NONE;
+    moves_at(g, t, mover, i, &mut None, &mut reads, &mut out)?;
     Ok(out)
 }
 
 /// Appends the move candidates for the mover's unit on tile `i` to `out`, in the game's target order,
 /// each with its embark flag. `shared` carries the mover's search context from one tile to the next.
 /// `mover` must be the current player with no pending trigger (as `menu` guarantees): the validator's
-/// current-player and trigger checks are not repeated here.
+/// current-player and trigger checks are not repeated here. `reads` gets the tiles the search
+/// read beyond the unit's own tile.
 pub(crate) fn moves_at(
     g: &Game,
     t: &Tables,
     mover: i32,
     i: usize,
     shared: &mut Option<Mover>,
+    reads: &mut Reads,
     out: &mut Vec<crate::menu::Cand>,
 ) -> Result<(), String> {
     let tile = &g.tiles[i];
@@ -527,7 +560,7 @@ pub(crate) fn moves_at(
     // That search and this flood fill use the same edges, costs and budget, so they reach
     // the same tiles unless a search hits its cap of 1 000 steps; over 1 000 games it
     // rejected none of 9.5 million destinations and peaked at 75 steps.
-    profile.options(range, |target| {
+    profile.options(range, reads, |target| {
         let embark = is_water(target) && profile.embarks(target);
         let mut c = crate::menu::cand(MOVE)
             .source(tile.coordinates)
@@ -617,6 +650,22 @@ pub(crate) fn mover_context(g: &Game, t: &Tables, owner: i32) -> Result<Mover, S
     })
 }
 
+/// The unit's movement with its effects (Boosted, Swift or Bubble add one,
+/// Poisoned takes one above 1). A search spends at least 5 tenths a step (a road), so it reaches
+/// no tile more than twice this from the unit.
+pub(crate) fn movement_range(g: &Game, t: &Tables, unit: &Unit) -> Result<i32, String> {
+    let fx = unit_effects(g, unit);
+    let data = t.units.get(unit.kind as usize).ok_or("unknown unit kind")?;
+    let mut range = data.movement + i32::from(fx.contains(&BOOSTED));
+    if fx.contains(&SWIFT) || fx.contains(&BUBBLE) {
+        range += 1;
+    }
+    if fx.contains(&POISONED) && range > 1 {
+        range -= 1;
+    }
+    Ok(range)
+}
+
 /// The movement for `unit` and its path-search profile (the profile does
 /// not depend on the movement)
 fn profile_with<'a>(
@@ -628,13 +677,7 @@ fn profile_with<'a>(
     let fx = unit_effects(g, unit);
     let data = t.units.get(unit.kind as usize).ok_or("unknown unit kind")?;
     let has = |a: &str| data.unit_abilities.has(a);
-    let mut range = data.movement + i32::from(fx.contains(&BOOSTED));
-    if fx.contains(&SWIFT) || fx.contains(&BUBBLE) {
-        range += 1;
-    }
-    if fx.contains(&POISONED) && range > 1 {
-        range -= 1;
-    }
+    let range = movement_range(g, t, unit)?;
     // the unit's own terrain list, limited to what the player has unlocked unless it navigates
     let mut own_terrain = 0;
     for n in &data.movement_terrain {

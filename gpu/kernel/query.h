@@ -47,6 +47,14 @@ EF_FN EfResult ef_tribe_unit(const EfTables *t, int32_t tribe, int32_t kind, int
  * then index without further checks; each entry point runs this on a block that comes from
  * outside (an upload), and the step will run it after each decision. A block that fails is a
  * broken invariant. */
+/* An explorer's bit in a tile's explorers_mask_n: ids 0 to 6 their own bit, Nature bit 7, any
+ * other id none (its tests scan the list). The mask is kept with the list: to_device and the
+ * Explore action set it, and ef_game_check refuses a block where they differ. */
+EF_FN uint8_t ef_explorer_bit(int32_t id) {
+    if (id == EF_NATURE) return (uint8_t)0x80u;
+    return id >= 0 && id < 7 ? (uint8_t)(1u << id) : (uint8_t)0u;
+}
+
 EF_BIG EfResult ef_game_check(const EfGame *g, int32_t tile_cap, int32_t unit_cap) {
 #define EF_BAD(cond) do { if (cond) return ef_err(EF_ERR_INVARIANT, __LINE__); } while (0)
 #define EF_LEN(len, cap) EF_BAD((len) < 0 || (len) > (cap))
@@ -81,6 +89,11 @@ EF_BIG EfResult ef_game_check(const EfGame *g, int32_t tile_cap, int32_t unit_ca
     for (int i = 0; i < g->tile_count; i++) {
         const EfTile *x = &ef_ctiles(g)[i];
         EF_LEN(x->explorers_len_n, 5);
+        {
+            uint8_t mask = 0;
+            for (int k = 0; k < x->explorers_len_n; k++) mask = (uint8_t)(mask | ef_explorer_bit(x->explorers_n[k]));
+            EF_BAD(x->explorers_mask_n != mask);
+        }
         EF_LEN(x->effects_len_n, 5);
         EF_LEN(x->improvement.effects_len_n, 2);
         EF_BAD(x->unit_n != EF_NONE && (x->unit_n < 0 || x->unit_n >= g->unit_cap || !ef_cunits(g)[x->unit_n].used_n));
@@ -116,6 +129,11 @@ EF_FN int ef_contains_u8(const uint8_t *items, int32_t len, int32_t v) {
     for (int i = 0; i < len; i++)
         if (items[i] == v) return 1;
     return 0;
+}
+/* whether `id` explored the tile */
+EF_FN int ef_tile_explored(const EfTile *t, int32_t id) {
+    uint8_t b = ef_explorer_bit(id);
+    return b ? (t->explorers_mask_n & b) != 0 : ef_contains_u8(t->explorers_n, t->explorers_len_n, id);
 }
 EF_FN int ef_contains_i8(const int8_t *items, int32_t len, int32_t v) {
     for (int i = 0; i < len; i++)
@@ -156,22 +174,39 @@ EF_BIG EfResult ef_unlockable_techs(const EfGame *g, const EfTables *t, int32_t 
     if (!tree) return ef_err(EF_ERR_UNKNOWN_TRIBE, 0);
     int32_t n = 0;
     if (tree->order_error) return ef_err(EF_ERR_TABLE, tree->order_error - 1);
+    /* membership in the player's techs and in `out` as bit sets (ids below EF_MAX_TECHS, as the
+     * catalog's are); an id outside that range keeps the list scans */
+    uint64_t have[(EF_MAX_TECHS + 63) / 64], taken[(EF_MAX_TECHS + 63) / 64];
+    int sets = 1;
+    for (int w = 0; w < (EF_MAX_TECHS + 63) / 64; w++) have[w] = taken[w] = 0;
+    for (int k = 0; k < p->available_tech_len; k++) {
+        int32_t id = p->available_tech[k];
+        if (id < 0 || id >= EF_MAX_TECHS) sets = 0;
+        else have[id >> 6] |= 1ull << (id & 63);
+    }
+#define EF_HAS_TECH(id) (sets && (id) >= 0 && (id) < EF_MAX_TECHS ? (int)((have[(id) >> 6] >> ((id) & 63)) & 1u) \
+                                                                  : ef_contains(p->available_tech, p->available_tech_len, (id)))
+#define EF_TAKEN(id) ((id) >= 0 && (id) < EF_MAX_TECHS ? (int)((taken[(id) >> 6] >> ((id) & 63)) & 1u) : ef_contains(out, n, (id)))
+#define EF_TAKE(id) do { out[n++] = (id); if ((id) >= 0 && (id) < EF_MAX_TECHS) taken[(id) >> 6] |= 1ull << ((id) & 63); } while (0)
     for (int o = 0; o < tree->order_len; o++) {
         int32_t parent = tree->order[o];
         if (tree->links[parent].children_error) return ef_err(EF_ERR_TABLE, tree->links[parent].children_error - 1);
         const int32_t *children = tree->links[parent].children;
         int32_t len = tree->links[parent].children_len;
-        if (ef_contains(p->available_tech, p->available_tech_len, parent)) {
+        if (EF_HAS_TECH(parent)) {
             for (int k = 0; k < len; k++) {
                 int32_t c = children[k];
-                if (!ef_contains(p->available_tech, p->available_tech_len, c) && !ef_contains(out, n, c)) out[n++] = c;
+                if (!EF_HAS_TECH(c) && !EF_TAKEN(c)) EF_TAKE(c);
             }
         } else {
             int any = 0;
-            for (int k = 0; k < len; k++) any |= ef_contains(p->available_tech, p->available_tech_len, children[k]);
-            if (any && !ef_contains(out, n, parent)) out[n++] = parent;
+            for (int k = 0; k < len; k++) any |= EF_HAS_TECH(children[k]);
+            if (any && !EF_TAKEN(parent)) EF_TAKE(parent);
         }
     }
+#undef EF_HAS_TECH
+#undef EF_TAKEN
+#undef EF_TAKE
     *count = n;
     return ef_ok();
 }
