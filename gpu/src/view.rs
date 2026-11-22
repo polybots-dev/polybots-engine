@@ -109,6 +109,15 @@ impl Views {
         self.words.as_mut_ptr().cast()
     }
 
+    /// The viewer of view `k` as written: below zero where none was (`ef_other_view` with no
+    /// other seat or in a slot not playing, or a view never written on the device, whose bytes
+    /// are all set).
+    pub fn viewer(&self, k: usize) -> i32 {
+        let words = view_size(self.tile_cap) / 8;
+        // SAFETY: as `to_view`: the header starts each view, aligned to 8 bytes.
+        unsafe { (*self.words[k * words..].as_ptr().cast::<EfView>()).viewer }
+    }
+
     /// View `k`, as the engine's `View`.
     pub fn to_view(&self, k: usize) -> Result<View, String> {
         let words = view_size(self.tile_cap) / 8;

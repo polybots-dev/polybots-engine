@@ -54,7 +54,7 @@ pub struct GpuBatch {
     slots: Vec<Slot>,
     workers: usize,
     /// the views of the last run, read from the device when first asked for
-    views: Option<Vec<Option<View>>>,
+    views: HostViews,
     /// device steps ran since the slots above were last read from the device (`sync`)
     stale: bool,
     /// a `step_launch` has not been waited for (`step_wait`): every other device call waits
@@ -65,6 +65,14 @@ pub struct GpuBatch {
     /// a restart or reset failed part way (a device error, or a bank worker's panic): the
     /// slots may be part placed, so every later call that changes them fails with this
     broken: Option<String>,
+}
+
+/// Per slot, the views of the last run copied to the host: the mover's, and the other seat's
+/// (`Outputs::other_view`); each read when first asked for.
+#[derive(Default)]
+struct HostViews {
+    mover: Option<Vec<Option<View>>>,
+    other: Option<Vec<Option<View>>>,
 }
 
 fn status_of(code: i32) -> Status {
@@ -88,7 +96,8 @@ impl GpuBatch {
         GpuBatch::with_outputs(catalog_json, games, workers, max_side, Outputs::default())
     }
 
-    /// As `new`, computing the optional `outputs` too (`exports().previews`, `.defence`).
+    /// As `new`, computing the optional `outputs` too (`exports().previews`, `.defence`,
+    /// `.other_tiles` and the rest of the other seat's view).
     pub fn with_outputs(
         catalog_json: &str,
         games: usize,
@@ -123,7 +132,7 @@ impl GpuBatch {
             device,
             slots: (0..games).map(|_| Slot::default()).collect(),
             workers: workers.max(1),
-            views: None,
+            views: HostViews::default(),
             stale: false,
             in_flight: false,
             mixed_boards: false,
@@ -147,7 +156,7 @@ impl GpuBatch {
     /// Run the slots by `index` on the device and take in the outcome of those run.
     fn run(&mut self, index: &[i32]) -> Result<(), String> {
         self.sync()?;
-        self.views = None;
+        self.views = HostViews::default();
         self.device.run_slots(index, THREADS)?;
         self.take_in(index)
     }
@@ -161,7 +170,7 @@ impl GpuBatch {
             return Ok(());
         }
         self.stale = false;
-        self.views = None;
+        self.views = HostViews::default();
         let all: Vec<i32> = self
             .slots
             .iter()
@@ -323,7 +332,7 @@ impl GpuBatch {
             return Ok(Vec::new());
         }
         // from here the host's copy of the slots is not the device's
-        self.views = None;
+        self.views = HostViews::default();
         self.stale = true;
         let mut index = vec![SKIP; self.slots.len()];
         let mut at = 0;
@@ -461,7 +470,7 @@ impl GpuBatch {
         self.usable()?;
         self.exports()?;
         self.stale = true;
-        self.views = None;
+        self.views = HostViews::default();
         Ok(())
     }
 
@@ -545,7 +554,7 @@ impl GpuBatch {
     /// device on the first call after a reset or step.
     pub fn view(&mut self, slot: usize) -> Result<Option<&View>, String> {
         self.sync()?;
-        if self.views.is_none() {
+        if self.views.mover.is_none() {
             let (views, _) = self.device.read_views()?;
             let mut out = Vec::with_capacity(views.len());
             for k in 0..views.len() {
@@ -554,9 +563,25 @@ impl GpuBatch {
                     _ => None,
                 });
             }
-            self.views = Some(out);
+            self.views.mover = Some(out);
         }
-        Ok(self.views.as_ref().unwrap()[slot].as_ref())
+        Ok(self.views.mover.as_ref().unwrap()[slot].as_ref())
+    }
+
+    /// The view of the next seat after the player to move in a playing slot, as the CPU
+    /// batch's `other_view` (the privileged critic's input). Needs `Outputs::other_view`.
+    pub fn other_view(&mut self, slot: usize) -> Result<Option<&View>, String> {
+        self.sync()?;
+        if self.views.other.is_none() {
+            let views = self.device.read_other_views()?;
+            let mut out = Vec::with_capacity(views.len());
+            for k in 0..views.len() {
+                let shown = self.slots[k].status == Status::Playing && views.viewer(k) >= 0;
+                out.push(shown.then(|| views.to_view(k)).transpose()?);
+            }
+            self.views.other = Some(out);
+        }
+        Ok(self.views.other.as_ref().unwrap()[slot].as_ref())
     }
 
     /// The game in a slot, rebuilt from its block (for tests that compare states).

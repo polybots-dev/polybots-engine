@@ -82,6 +82,32 @@ while True:
 **`status()`**: per slot 0 empty, 1 playing, 2 ended, 3 truncated (reached `action_limit`),
 4 refused, 5 failed. `STATUS` names them.
 
+**`load(slot, state, account)`** and **`command(slot, index)`** (cpu backend): a live
+multiplayer game in a slot.
+- `state` is the game's state as the backend returns it (`bytes`: the rules version, then the
+  serialized game). `account` is your account id as text. `load` returns your player id and the
+  index to send your next command with.
+- The slot plays (status 1) only while you are to move, with your own view and legal moves, as
+  in a game the engine started. While another player is to move it is empty (status 0).
+- `command(slot, index)` is the legal move `index` as the bytes to send.
+- `load` raises for a state it does not take: another rules version or board side than the
+  batch's, an account with no seat, a state saved in the middle of a command, or a field it
+  does not read (it names it). Load each new state again; do not `step` a loaded slot and
+  expect the backend to agree.
+
+```python
+batch = engine_fast.Batch(games=1, size=11)
+
+def decide(game_id, state):                  # the bot function of polybots-client
+    seat, index = batch.load(0, state, MY_ACCOUNT_ID)
+    if batch.status()[0] != 1:
+        return None                          # not my turn, or the game is over
+    offsets, moves = batch.moves()
+    tiles, scalars, players, tech = batch.views()
+    choice = 0                               # your policy: an index into moves
+    return batch.command(0, choice), index
+```
+
 **`winner()`**: the winner's player id of an ended game, 0 otherwise.
 
 **`reason(slot)`**: why a slot was refused or failed, for example the name of a rule the engine

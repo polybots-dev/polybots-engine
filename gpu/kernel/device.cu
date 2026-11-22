@@ -64,14 +64,24 @@ __device__ __noinline__ EfResult ef_device_slot(EfGame *g, const EfTables *t, Ef
  * computed and allocated only when asked for */
 #define EF_WANT_PREVIEWS 1
 #define EF_WANT_DEFENCE 2
+#define EF_WANT_OTHER_VIEW 4
 typedef struct {
     int32_t *scalars;
     int64_t *players;
     int16_t *tech;
     int16_t (*previews)[4];   /* EF_MAX_ROWS per slot, or NULL */
     int16_t *defence;         /* cells per slot, or NULL */
+    /* the other seat's view (outputs.h ef_other_view) and its exported arrays, laid out as the
+     * mover's; all NULL unless asked for */
+    EfView *other_views;
+    int32_t *other_scalars;
+    int64_t *other_players;
+    int16_t *other_tech;
+    size_t view_size;
     int32_t techs, cells;
 } EfOut;
+
+__device__ void ef_export_view(int g, EfView *v, int shown, int32_t *scalars, int64_t *players, int16_t *tech, EfOut o);
 
 /* After slot g ran: no list row past its length holds an earlier decision's move (the rows are
  * exported in place: after a turn change they were another player's), a slot not playing has an
@@ -91,12 +101,23 @@ __device__ void ef_slot_epilogue(int g, EfMenu *m, int32_t before, EfView *v, in
     }
     if (o.defence && !playing)
         for (int k = 0; k < o.cells; k++) o.defence[(size_t)g * (size_t)o.cells + (size_t)k] = -1;
-    int32_t *sc = o.scalars + (size_t)g * EF_OUT_SCALARS;
-    int64_t *pl = o.players + (size_t)g * EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS;
-    int16_t *te = o.tech + (size_t)g * (size_t)o.techs;
+    ef_export_view(g, v, playing, o.scalars, o.players, o.tech, o);
+    if (o.other_views) {
+        EfView *ov = (EfView *)((char *)o.other_views + o.view_size * (size_t)g);
+        int shown = playing && ov->viewer >= 0;
+        if (!shown) ov->viewer = EF_NONE;   /* the header says so too, not only the exports */
+        ef_export_view(g, ov, shown, o.other_scalars, o.other_players, o.other_tech, o);
+    }
+}
+
+/* Slot g's exported arrays from view v (planes in place), or -1 everywhere when it has none. */
+__device__ void ef_export_view(int g, EfView *v, int shown, int32_t *scalars, int64_t *players, int16_t *tech, EfOut o) {
+    int32_t *sc = scalars + (size_t)g * EF_OUT_SCALARS;
+    int64_t *pl = players + (size_t)g * EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS;
+    int16_t *te = tech + (size_t)g * (size_t)o.techs;
     for (int k = 0; k < EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS; k++) pl[k] = -1;
     for (int k = 0; k < o.techs; k++) te[k] = -1;
-    if (!playing) {
+    if (!shown) {
         int16_t *tiles = ef_view_tiles(v);
         for (int k = 0; k < EF_VIEW_PLANES * o.cells; k++) tiles[k] = -1;
         for (int k = 0; k < EF_OUT_SCALARS; k++) sc[k] = -1;
@@ -134,6 +155,8 @@ __device__ EfResult ef_run_slot(int g, EfGame *games, EfCaps caps, const EfTable
     if (r.code == EF_OK && status[g] == EF_PLAYING && o.defence)
         r = ef_defence_plane(game, tables, game->players[game->current_player_index].id,
                              o.defence + (size_t)g * (size_t)o.cells);
+    if (r.code == EF_OK && status[g] == EF_PLAYING && o.other_views)
+        r = ef_other_view(game, tables, (EfView *)((char *)o.other_views + o.view_size * (size_t)g));
     if (r.code != EF_OK) {
         checks[g] = r;
         status[g] = ef_error_is_failure(r.code) ? EF_FAILED : EF_REFUSED;
@@ -487,6 +510,10 @@ void ef_cuda_destroy(EfDevice *d) {
     cudaFree(d->out.tech);
     cudaFree(d->out.previews);
     cudaFree(d->out.defence);
+    cudaFree(d->out.other_views);
+    cudaFree(d->out.other_scalars);
+    cudaFree(d->out.other_players);
+    cudaFree(d->out.other_tech);
     cudaFree(d->d_applied);
     cudaFree(d->d_word);
     if (d->stepped) cudaEventDestroy(d->stepped);
@@ -500,7 +527,7 @@ void ef_cuda_destroy(EfDevice *d) {
  * *error when it fails. */
 EfDevice *ef_cuda_create(int32_t games, int32_t tile_cap, int32_t unit_cap, int32_t techs, int32_t outputs, int32_t *error) {
     EfCaps caps = {tile_cap, unit_cap};
-    if (games <= 0 || !ef_caps_ok(caps) || techs < 0 || techs > 4096 || (outputs & ~(EF_WANT_PREVIEWS | EF_WANT_DEFENCE))) {
+    if (games <= 0 || !ef_caps_ok(caps) || techs < 0 || techs > 4096 || (outputs & ~(EF_WANT_PREVIEWS | EF_WANT_DEFENCE | EF_WANT_OTHER_VIEW))) {
         *error = (int)cudaErrorInvalidValue;
         return NULL;
     }
@@ -514,6 +541,7 @@ EfDevice *ef_cuda_create(int32_t games, int32_t tile_cap, int32_t unit_cap, int3
     d->view_size = (size_t)ef_view_size(tile_cap);
     d->out.techs = techs;
     d->out.cells = tile_cap;
+    d->out.view_size = d->view_size;
     cudaError_t e = cudaMalloc(&d->d_games, n * stride);
     if (e == cudaSuccess) e = cudaMalloc(&d->out.scalars, n * EF_OUT_SCALARS * sizeof(int32_t));
     if (e == cudaSuccess) e = cudaMalloc(&d->out.players, n * EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS * sizeof(int64_t));
@@ -535,6 +563,18 @@ EfDevice *ef_cuda_create(int32_t games, int32_t tile_cap, int32_t unit_cap, int3
     if (e == cudaSuccess && (outputs & EF_WANT_DEFENCE)) {
         e = cudaMalloc((void **)&d->out.defence, n * (size_t)tile_cap * sizeof(int16_t));
         if (e == cudaSuccess) e = cudaMemset(d->out.defence, 0xFF, n * (size_t)tile_cap * sizeof(int16_t));
+    }
+    if (e == cudaSuccess && (outputs & EF_WANT_OTHER_VIEW)) {
+        size_t t = (size_t)(techs > 0 ? techs : 1);
+        e = cudaMalloc((void **)&d->out.other_views, n * d->view_size);
+        if (e == cudaSuccess) e = cudaMalloc(&d->out.other_scalars, n * EF_OUT_SCALARS * sizeof(int32_t));
+        if (e == cudaSuccess) e = cudaMalloc(&d->out.other_players, n * EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS * sizeof(int64_t));
+        if (e == cudaSuccess) e = cudaMalloc(&d->out.other_tech, n * t * sizeof(int16_t));
+        /* all bits set: no view written (viewer -1) and -1 in every exported integer */
+        if (e == cudaSuccess) e = cudaMemset(d->out.other_views, 0xFF, n * d->view_size);
+        if (e == cudaSuccess) e = cudaMemset(d->out.other_scalars, 0xFF, n * EF_OUT_SCALARS * sizeof(int32_t));
+        if (e == cudaSuccess) e = cudaMemset(d->out.other_players, 0xFF, n * EF_OUT_PLAYERS * EF_OUT_PLAYER_FIELDS * sizeof(int64_t));
+        if (e == cudaSuccess) e = cudaMemset(d->out.other_tech, 0xFF, n * t * sizeof(int16_t));
     }
     if (e == cudaSuccess) e = cudaMalloc(&d->d_tables, sizeof(EfTables));
     if (e == cudaSuccess) e = cudaMalloc(&d->d_viewers, n * sizeof(int32_t));
@@ -625,6 +665,13 @@ int ef_cuda_read_views(EfDevice *d, EfView *views, int32_t *results) {
     cudaError_t e = ef_copy(d, views, d->d_views, (size_t)d->games * d->view_size, cudaMemcpyDeviceToHost);
     if (e == cudaSuccess) e = ef_copy(d, results, d->d_results, (size_t)d->games * sizeof(EfResult), cudaMemcpyDeviceToHost);
     return (int)e;
+}
+
+/* every slot's other-seat view (EF_WANT_OTHER_VIEW): written for each slot left playing by its
+ * last run; viewer -1 in a slot not playing or with no other seat */
+int ef_cuda_read_other_views(EfDevice *d, EfView *views) {
+    if (!d->out.other_views) return (int)cudaErrorInvalidValue;
+    return (int)ef_copy(d, views, d->out.other_views, (size_t)d->games * d->view_size, cudaMemcpyDeviceToHost);
 }
 
 /* free and total device memory in bytes */
@@ -803,6 +850,7 @@ int ef_cuda_device_name(char *name, int32_t capacity) {
 typedef struct {
     uint64_t status, winners, counts, applied, rows, tiles, scalars, players, tech;
     uint64_t previews, defence;   /* 0 unless the batch was made with them */
+    uint64_t other_tiles, other_scalars, other_players, other_tech;   /* the same */
     uint64_t menu_stride, view_stride;
     int32_t max_rows, planes, cells, techs;
 } EfExports;
@@ -819,6 +867,10 @@ int ef_cuda_exports(EfDevice *d, EfExports *x) {
     x->tech = (uint64_t)(uintptr_t)d->out.tech;
     x->previews = (uint64_t)(uintptr_t)d->out.previews;
     x->defence = (uint64_t)(uintptr_t)d->out.defence;
+    x->other_tiles = d->out.other_views ? (uint64_t)(uintptr_t)((char *)d->out.other_views + sizeof(EfView)) : 0;
+    x->other_scalars = (uint64_t)(uintptr_t)d->out.other_scalars;
+    x->other_players = (uint64_t)(uintptr_t)d->out.other_players;
+    x->other_tech = (uint64_t)(uintptr_t)d->out.other_tech;
     x->menu_stride = (uint64_t)sizeof(EfMenu);
     x->view_stride = (uint64_t)d->view_size;
     x->max_rows = EF_MAX_ROWS;

@@ -72,6 +72,7 @@ This file goes from the top down:
 | `aquarion.rs`, `elyrion.rs`, `polaris.rs`, `cymanti.rs` | the special tribes' own rules |
 | `random.rs` | the game's seeded random streams |
 | `view.rs`, `viewer.rs` | what one player may know; what a player remembers of units seen earlier |
+| `wire.rs` | reads a game as the game itself serializes it (a live multiplayer state) and writes a legal move as the command to send |
 | `queries.rs` | values a player reads off the screen that need a rules computation (income, a unit's panel, a city's work) |
 | `contract.rs` | canonical digests of a game state, used by the tests |
 | `shadow.rs` | a switch that makes every incremental computation also run in full and compare |
@@ -188,6 +189,7 @@ distributed.
 | `tests/move_admission.rs` | a move outside the legal list is refused and leaves the game unchanged |
 | `tests/step_allocations.rs` | the step allocates no heap memory per action in the common cases |
 | `tests/mangrove.rs` | a board feature no rule makes is refused on import |
+| `tests/wire.rs`, `batch/tests/load.rs` | a stored state (a seeded game with placeholder account ids) is read as pinned, what is not a whole state is refused, and a loaded slot plays for the account to move and for no other |
 | `batch/tests/matches_single_games.rs` | the batch plays each game exactly as the single-game calls do, at any number of threads |
 | `batch/tests/outputs.rs` | the income and maximum-health outputs equal the queries and a second statement of the rule |
 | `gpu/tests/step_lockstep.rs`, `menu_lockstep.rs`, `view.rs`, `special_lockstep.rs` | the C rules (host build, and the GPU with `cuda`) equal the Rust engine's step, legal moves and view at every decision of random games, special tribes included |

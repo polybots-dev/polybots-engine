@@ -173,3 +173,12 @@ int32_t ef_twin_defence(const EfGame *g, const EfTables *t, int16_t *out, int64_
     *arg = r.arg;
     return r.code;
 }
+
+/* outputs.h ef_other_view for the player to move; the view's viewer is EF_NONE when there is no
+ * other seat */
+int32_t ef_twin_other_view(const EfGame *g, const EfTables *t, EfView *out, int64_t *arg) {
+    EfResult r = ef_game_check(g, g->tile_cap, g->unit_cap);
+    if (r.code == EF_OK) r = ef_other_view(g, t, out);
+    *arg = r.arg;
+    return r.code;
+}

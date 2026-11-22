@@ -3,29 +3,31 @@
 //! owned by the caller, except the GPU's `device_arrays`, which are device memory.
 
 use ::engine_fast::reset::Config;
-use ::engine_fast::view::TILE_PLANES;
+use ::engine_fast::view::{View, TILE_PLANES};
+use batch::outputs::{PLAYER_FIELDS, SCALAR_FIELDS, VIEW_SEATS};
 use engine_fast_batch as batch;
-use numpy::ndarray::{Array1, Array2, Array3};
+use numpy::ndarray::{Array1, Array2, Array3, Axis};
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayLike1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use sha2::Digest;
+use std::borrow::Cow;
 
 /// The SHA-256 of the rule data of rules version 124 (game build 2.18.0.16751), the one
 /// version this package implements.
 const RULES_SHA256: &str = "c6806c77963b5377bdbc2570bf0a3abece622e4e148883754dd190b02f890086";
 
-/// The most players a view lists: the viewer and up to three it has met.
-const SEATS: usize = 4;
-const PLAYER_FIELDS: [&str; 4] = ["seat", "tribe", "relation", "score"];
-const SCALAR_FIELDS: [&str; 3] = ["viewer", "turn", "stars"];
 /// The optional outputs a batch can be made with.
-const OUTPUTS: [&str; 4] = ["previews", "defence", "income", "max_health"];
+const OUTPUTS: [&str; 5] = ["previews", "defence", "income", "max_health", "other_view"];
 /// The outputs only the cpu backend computes.
 const CPU_OUTPUTS: [&str; 2] = ["income", "max_health"];
 
 #[cfg(feature = "cuda")]
 mod device;
+
+/// The rules version a loaded state and a written command carry in front.
+const RULES_VERSION: u32 = 124;
 
 fn refuse(e: String) -> PyErr {
     PyValueError::new_err(e)
@@ -52,6 +54,19 @@ fn rules(path: Option<String>) -> PyResult<String> {
     }
     Ok(text)
 }
+
+/// A row of a fresh array, which is contiguous.
+fn slice<T>(row: Option<&mut [T]>) -> PyResult<&mut [T]> {
+    row.ok_or_else(|| refuse("array layout".into()))
+}
+
+/// `(tiles, scalars, players, tech)` of `Batch.views`.
+type Views<'py> = (
+    Bound<'py, PyArray3<i16>>,
+    Bound<'py, PyArray2<i32>>,
+    Bound<'py, PyArray3<i64>>,
+    Bound<'py, PyArray2<i16>>,
+);
 
 /// The engine behind a `Batch`: the CPU batch, or with the `cuda` feature the GPU's.
 #[allow(clippy::large_enum_variant)] // one per Python batch, never moved in a loop
@@ -105,11 +120,18 @@ impl Inner {
     fn moves(&self, slot: usize) -> &[batch::Move] {
         each!(self, b => b.moves(slot))
     }
-    fn view(&mut self, slot: usize) -> Result<Option<&::engine_fast::view::View>, String> {
+    fn view(&mut self, slot: usize) -> Result<Option<&View>, String> {
         match self {
             Inner::Cpu(b) => Ok(b.view(slot)),
             #[cfg(feature = "cuda")]
             Inner::Gpu(b) => b.view(slot),
+        }
+    }
+    fn other_view(&mut self, slot: usize) -> Result<Option<Cow<'_, View>>, String> {
+        match self {
+            Inner::Cpu(b) => Ok(b.other_view(slot)?.map(Cow::Owned)),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(b) => Ok(b.other_view(slot)?.map(Cow::Borrowed)),
         }
     }
 }
@@ -146,6 +168,51 @@ impl Batch {
             #[cfg(feature = "cuda")]
             Inner::Gpu(_) => Err(refuse(format!("{name}: the cpu backend only"))),
         }
+    }
+
+    /// The cpu batch, mutable.
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))]
+    fn cpu_mut(&mut self, name: &str) -> PyResult<&mut batch::Batch> {
+        match &mut self.inner {
+            Inner::Cpu(b) => Ok(b),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(_) => Err(refuse(format!("{name}: the cpu backend only"))),
+        }
+    }
+
+    /// The mover's views (`views`), or with `other` the other seat's (`other_views`).
+    fn view_arrays<'py>(&mut self, py: Python<'py>, other: bool) -> PyResult<Views<'py>> {
+        let n = self.inner.len();
+        let cells = (self.size as usize).pow(2);
+        let techs = self.inner.tech_ids();
+        let mut tiles = Array3::from_elem((n, TILE_PLANES.len(), cells), -1i16);
+        let mut scalars = Array2::from_elem((n, SCALAR_FIELDS.len()), -1i32);
+        let mut players = Array3::from_elem((n, VIEW_SEATS, PLAYER_FIELDS.len()), -1i64);
+        let mut tech = Array2::from_elem((n, techs), -1i16);
+        for i in 0..n {
+            let v = if other {
+                self.inner.other_view(i)
+            } else {
+                self.inner.view(i).map(|v| v.map(Cow::Borrowed))
+            };
+            let Some(v) = v.map_err(refuse)? else {
+                continue;
+            };
+            batch::outputs::view_rows(
+                &v,
+                slice(tiles.index_axis_mut(Axis(0), i).into_slice())?,
+                slice(scalars.index_axis_mut(Axis(0), i).into_slice())?,
+                slice(players.index_axis_mut(Axis(0), i).into_slice())?,
+                slice(tech.index_axis_mut(Axis(0), i).into_slice())?,
+            )
+            .map_err(|e| refuse(format!("slot {i}: {e}")))?;
+        }
+        Ok((
+            tiles.into_pyarray(py),
+            scalars.into_pyarray(py),
+            players.into_pyarray(py),
+            tech.into_pyarray(py),
+        ))
     }
 
     /// One plane per slot as int16 `[games, size * size]`, -1 for a slot without one.
@@ -209,6 +276,7 @@ impl Batch {
                     engine_fast_gpu::device::Outputs {
                         previews: wanted.contains(&"previews"),
                         defence: wanted.contains(&"defence"),
+                        other_view: wanted.contains(&"other_view"),
                     },
                 )
                 .map_err(refuse)?,
@@ -468,6 +536,103 @@ impl Batch {
         Ok(Array1::from_iter(applied.iter().map(|&a| a as u8)).into_pyarray(py))
     }
 
+    /// The legality mask of every slot over the fixed action table (`table_slots(size)` bits,
+    /// slot i in bit i % 32 of word i / 32): uint32 `[games, words]`, zero for slots not
+    /// playing. The cpu backend.
+    fn masks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u32>>> {
+        let b = self.cpu("masks")?;
+        let words = batch::table::slots((self.size * self.size) as usize).div_ceil(32);
+        let mut out = Array2::<u32>::zeros((b.len(), words));
+        let (mut rows, mut mask) = (Vec::new(), Vec::new());
+        for slot in 0..b.len() {
+            if b.table(slot, &mut rows, &mut mask).map_err(refuse)? {
+                out.row_mut(slot).assign(&Array1::from_vec(mask.clone()));
+            }
+        }
+        Ok(out.into_pyarray(py))
+    }
+
+    /// The action-table slot of every legal row, in `moves()` order (int64 `[rows]`; slot i's
+    /// rows are `offsets[i]:offsets[i + 1]` of `moves()`). The cpu backend.
+    fn table_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i64>>> {
+        let b = self.cpu("table_rows")?;
+        let (mut rows, mut mask, mut out) = (Vec::new(), Vec::new(), Vec::new());
+        for slot in 0..b.len() {
+            b.table(slot, &mut rows, &mut mask).map_err(refuse)?;
+            out.extend(rows.iter().map(|&r| i64::from(r)));
+        }
+        Ok(Array1::from_vec(out).into_pyarray(py))
+    }
+
+    /// What `table_encode` and `table_decode` need per slot: int32 `[games, 3]`, the board
+    /// side, the player to move and the number of seats; -1 for slots not playing.
+    fn table_frames<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i32>>> {
+        let b = self.cpu("table_frames")?;
+        let mut out = Array2::from_elem((b.len(), 3), -1i32);
+        for slot in 0..b.len() {
+            if let (batch::Status::Playing, Some(g)) = (b.status(slot), b.game(slot)) {
+                let f = batch::outputs::table_frame(g).map_err(refuse)?;
+                out.row_mut(slot)
+                    .assign(&Array1::from_vec(vec![f.side, f.mover, f.seats]));
+            }
+        }
+        Ok(out.into_pyarray(py))
+    }
+
+    /// `step` with one action-table slot per game (int64, `SKIP` to skip) in place of a row
+    /// index; a slot no legal row holds is rejected (2) and changes nothing. The cpu backend.
+    fn step_table<'py>(
+        &mut self,
+        py: Python<'py>,
+        slots: PyArrayLike1<i64, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u8>>> {
+        let slots = slots.as_array().to_vec();
+        let b = self.cpu_mut("step_table")?;
+        let mut applied = vec![batch::Applied::Skipped; b.len()];
+        py.allow_threads(|| b.step_table(&slots, &mut applied))
+            .map_err(refuse)?;
+        Ok(Array1::from_iter(applied.iter().map(|&a| a as u8)).into_pyarray(py))
+    }
+
+    /// Put a multiplayer game's state in `slot`, for the player whose account id is `account`
+    /// (its usual text, dashed or not). `state` is the backend's bytes: the rules version, then
+    /// the serialized game. The slot plays (status 1) only while that player is to move, with
+    /// that player's view and legal moves; while another player is to move it is empty. Returns
+    /// the player's id and the index the next command is sent with. cpu backend only.
+    fn load(&mut self, slot: usize, state: &[u8], account: &str) -> PyResult<(i32, usize)> {
+        let size = self.size;
+        let b = self.cpu_mut("load")?;
+        // a real state is some tens of kilobytes
+        if state.len() > 4 << 20 {
+            return Err(refuse("the state is over 4 MiB".into()));
+        }
+        let wire = (state.get(4..))
+            .filter(|_| state[..4] == RULES_VERSION.to_le_bytes())
+            .ok_or_else(|| refuse(format!("the state is not of rules version {RULES_VERSION}")))?;
+        let account = engine_fast::wire::account(account.as_bytes()).map_err(refuse)?;
+        let loaded = b.load(slot, wire, account).map_err(refuse)?;
+        if loaded.width != size {
+            b.clear(slot);
+            return Err(refuse(format!("the game's board is not {size} by {size}")));
+        }
+        Ok((loaded.seat, loaded.commands))
+    }
+
+    /// The legal move `index` of a loaded slot as the command to send: the rules version, then
+    /// the serialized command. cpu backend only.
+    fn command<'py>(
+        &self,
+        py: Python<'py>,
+        slot: usize,
+        index: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let command = self.cpu("command")?.command(slot, index).map_err(refuse)?;
+        Ok(PyBytes::new(
+            py,
+            &[&RULES_VERSION.to_le_bytes()[..], &command].concat(),
+        ))
+    }
+
     /// Per slot: 0 empty, 1 playing, 2 ended, 3 truncated, 4 refused, 5 failed (`STATUS`).
     fn status<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<u8>>> {
         self.inner.sync().map_err(refuse)?;
@@ -529,67 +694,108 @@ impl Batch {
     ///   ascending order.
     ///
     /// Rows of a slot that is not playing, and unused entries, are -1.
-    #[allow(clippy::type_complexity)]
-    fn views<'py>(
-        &mut self,
-        py: Python<'py>,
-    ) -> PyResult<(
-        Bound<'py, PyArray3<i16>>,
-        Bound<'py, PyArray2<i32>>,
-        Bound<'py, PyArray3<i64>>,
-        Bound<'py, PyArray2<i16>>,
-    )> {
-        let n = self.inner.len();
-        let cells = (self.size as usize).pow(2);
-        let techs = self.inner.tech_ids();
-        let mut tiles = Array3::from_elem((n, TILE_PLANES.len(), cells), -1i16);
-        let mut scalars = Array2::from_elem((n, SCALAR_FIELDS.len()), -1i32);
-        let mut players = Array3::from_elem((n, SEATS, PLAYER_FIELDS.len()), -1i64);
-        let mut tech = Array2::from_elem((n, techs), -1i16);
-        for i in 0..n {
-            let Some(v) = self.inner.view(i).map_err(refuse)? else {
-                continue;
-            };
-            let row = tiles.index_axis_mut(numpy::ndarray::Axis(0), i);
-            let row = row
-                .into_slice()
-                .ok_or_else(|| refuse("tile layout".into()))?;
-            if v.tiles.len() != row.len() || v.players.len() > SEATS || v.tech.len() > techs {
-                return Err(refuse(format!(
-                    "slot {i}: a view larger than the batch's arrays"
-                )));
-            }
-            row.copy_from_slice(&v.tiles);
-            scalars[[i, 0]] = i32::from(v.viewer);
-            scalars[[i, 1]] = v.turn;
-            scalars[[i, 2]] = v.stars;
-            for (k, p) in v.players.iter().enumerate() {
-                let fields = [
-                    i64::from(p.seat),
-                    i64::from(p.tribe),
-                    i64::from(p.relation),
-                    p.score,
-                ];
-                for (f, value) in fields.into_iter().enumerate() {
-                    players[[i, k, f]] = value;
-                }
-            }
-            for (k, &id) in v.tech.iter().enumerate() {
-                tech[[i, k]] = id;
-            }
-        }
-        Ok((
-            tiles.into_pyarray(py),
-            scalars.into_pyarray(py),
-            players.into_pyarray(py),
-            tech.into_pyarray(py),
-        ))
+    fn views<'py>(&mut self, py: Python<'py>) -> PyResult<Views<'py>> {
+        self.view_arrays(py, false)
     }
+
+    /// The view of the next seat in turn order after the player to move (the other player in
+    /// a 2-seat game; when every other player is dead, the next of them), laid out as `views`;
+    /// -1 in slots not playing. For a privileged critic only: it shows what the mover's view
+    /// hides, and must never reach an actor's input. Every other output is the same with or
+    /// without it. Needs `outputs=("other_view",)`. Raises while any slot holds a loaded live
+    /// game, whose other seat is a real opponent.
+    fn other_views<'py>(&mut self, py: Python<'py>) -> PyResult<Views<'py>> {
+        self.asked("other_view")?;
+        self.view_arrays(py, true)
+    }
+}
+
+fn frame(size: i32, mover: i32, seats: i32) -> PyResult<batch::table::Frame> {
+    if !::engine_fast::reset::side_admitted(size)
+        || !(2..=4).contains(&seats)
+        || !(1..=seats).contains(&mover)
+    {
+        return Err(refuse(
+            "a board side 8 or 11 to 30, 2 to 4 seats, a mover among them".into(),
+        ));
+    }
+    Ok(batch::table::Frame {
+        side: size,
+        mover,
+        seats,
+    })
+}
+
+/// The number of slots of the action table on a board of side `size`.
+#[pyfunction]
+fn table_slots(size: i32) -> PyResult<usize> {
+    frame(size, 1, 2)?;
+    Ok(batch::table::slots((size * size) as usize))
+}
+
+/// Where the table's blocks start: (global, unit, attack, tile, move, end).
+#[pyfunction]
+fn table_blocks(size: i32) -> PyResult<[usize; 6]> {
+    frame(size, 1, 2)?;
+    Ok(batch::table::blocks((size * size) as usize))
+}
+
+/// The action-table slot of each row (int32 `[n, 5]` or `[n, 6]`: kind, source, target, option,
+/// opponent, and price, which is not read), for the player `mover` of a game of `seats` seats
+/// on side `size`: int64 `[n]`. Raises on a row that does not encode.
+#[pyfunction]
+fn table_encode<'py>(
+    py: Python<'py>,
+    rows: numpy::PyReadonlyArray2<'py, i32>,
+    size: i32,
+    mover: i32,
+    seats: i32,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let f = frame(size, mover, seats)?;
+    let rows = rows.as_array();
+    if !(5..=6).contains(&rows.ncols()) {
+        return Err(refuse("rows of 5 or 6 fields".into()));
+    }
+    let mut out = Vec::with_capacity(rows.nrows());
+    for r in rows.rows() {
+        let m = [r[0], r[1], r[2], r[3], r[4], -1];
+        out.push(batch::table::encode(&m, &f).map_err(refuse)? as i64);
+    }
+    Ok(Array1::from_vec(out).into_pyarray(py))
+}
+
+/// The five identifying fields (kind, source, target, option, opponent) of each slot: int32
+/// `[n, 5]`, a row of -1 for a slot no move uses.
+#[pyfunction]
+fn table_decode<'py>(
+    py: Python<'py>,
+    slots: PyArrayLike1<i64, AllowTypeChange>,
+    size: i32,
+    mover: i32,
+    seats: i32,
+) -> PyResult<Bound<'py, PyArray2<i32>>> {
+    let f = frame(size, mover, seats)?;
+    let slots = slots.as_array();
+    let mut out = Array2::from_elem((slots.len(), 5), -1i32);
+    for (k, &s) in slots.iter().enumerate() {
+        if let Some(fields) = usize::try_from(s)
+            .ok()
+            .and_then(|s| batch::table::decode(s, &f))
+        {
+            out.row_mut(k).assign(&Array1::from_vec(fields.to_vec()));
+        }
+    }
+    Ok(out.into_pyarray(py))
 }
 
 #[pymodule(name = "engine_fast")]
 fn python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Batch>()?;
+    m.add_function(wrap_pyfunction!(table_slots, m)?)?;
+    m.add_function(wrap_pyfunction!(table_blocks, m)?)?;
+    m.add_function(wrap_pyfunction!(table_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(table_decode, m)?)?;
+    m.add("TABLE_SCHEMA", batch::table::SCHEMA)?;
     m.add("RULES", 124)?;
     m.add("TILE_PLANES", TILE_PLANES.to_vec())?;
     m.add("MOVE_FIELDS", batch::MOVE_FIELDS.to_vec())?;

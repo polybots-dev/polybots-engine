@@ -195,6 +195,14 @@ pub(crate) fn tail(g: &Game, t: &Tables, mover: i32, out: &mut Vec<Cand>) -> Res
     Ok(())
 }
 
+/// Repeats `once_each` dropped whose price differed from the kept candidate's, since the
+/// process started. The fixed action table has no notion of a first candidate, so its
+/// coverage check needs this to stay 0.
+pub fn repeats_with_another_price() -> u64 {
+    REPEAT_PRICE_DIFFERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+static REPEAT_PRICE_DIFFERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Keep the first candidate of each distinct command, in order (the game adds each
 /// command once: retained_ui_helpers `seen`).
 fn once_each(out: &mut Vec<Cand>) {
@@ -221,12 +229,16 @@ fn once_each(out: &mut Vec<Cand>) {
         let mut at = hash(&out[i].action) as usize & (slots - 1);
         let repeat = loop {
             match table[at] {
-                EMPTY => break false,
-                j if out[j as usize].action == out[i].action => break true,
+                EMPTY => break None,
+                j if out[j as usize].action == out[i].action => break Some(j as usize),
                 _ => at = (at + 1) & (slots - 1),
             }
         };
-        if !repeat {
+        if let Some(j) = repeat {
+            if out[j].details.price != out[i].details.price {
+                REPEAT_PRICE_DIFFERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        } else {
             table[at] = kept as u32;
             // everything between `kept` and `i` is a repeat, so the order of the kept is unchanged
             out.swap(kept, i);

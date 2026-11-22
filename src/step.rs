@@ -458,7 +458,11 @@ fn move_action(
 }
 
 /// The chosen candidate as a command, with the game validator's state writes applied.
-fn admit(g: &mut Game, t: &Tables, action: &engine_fast_frame::Action) -> Result<Command, String> {
+pub(crate) fn admit(
+    g: &mut Game,
+    t: &Tables,
+    action: &engine_fast_frame::Action,
+) -> Result<Command, String> {
     let p = mover(g);
     let place = |c: Option<engine_fast_frame::Xy>, what: &str| {
         c.map(|c| Xy { x: c.x, y: c.y })

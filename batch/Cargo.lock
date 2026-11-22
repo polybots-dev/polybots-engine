@@ -94,6 +94,7 @@ dependencies = [
  "engine-fast",
  "engine-fast-frame",
  "rayon",
+ "serde_json",
 ]
 
 [[package]]

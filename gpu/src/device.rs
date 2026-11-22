@@ -44,6 +44,7 @@ extern "C" {
         views: *mut EfView,
         results: *mut KernelResult,
     ) -> i32;
+    fn ef_cuda_read_other_views(device: *mut c_void, views: *mut EfView) -> i32;
     fn ef_cuda_memory(free: *mut u64, total: *mut u64) -> i32;
     fn ef_cuda_set_moves(device: *mut c_void, moves: *const EfMove) -> i32;
     fn ef_cuda_run_advance(device: *mut c_void, threads: i32) -> i32;
@@ -85,6 +86,12 @@ pub struct Exports {
     pub previews: u64,
     /// int16 per tile (`cells` per slot), or 0 when the batch was made without
     pub defence: u64,
+    /// the other seat's view (`Outputs::other_view`), laid out as `tiles`, `scalars`,
+    /// `players` and `tech` (its planes at `other_tiles + g * view_stride`); 0 without
+    pub other_tiles: u64,
+    pub other_scalars: u64,
+    pub other_players: u64,
+    pub other_tech: u64,
     pub menu_stride: u64,
     pub view_stride: u64,
     pub max_rows: i32,
@@ -101,11 +108,15 @@ pub struct Outputs {
     pub previews: bool,
     /// the defence-bonus plane of the units the mover sees
     pub defence: bool,
+    /// the view of the next seat after the mover (the privileged critic's input)
+    pub other_view: bool,
 }
 
 impl Outputs {
     fn flags(self) -> i32 {
-        i32::from(self.previews) | (i32::from(self.defence) << 1)
+        i32::from(self.previews)
+            | (i32::from(self.defence) << 1)
+            | (i32::from(self.other_view) << 2)
     }
 }
 
@@ -305,6 +316,17 @@ impl DeviceBatch {
             ef_cuda_read_views(self.handle, views.as_mut_ptr(), results.as_mut_ptr())
         })?;
         Ok((views, results))
+    }
+
+    /// Every slot's other-seat view, as its last run left it (`Outputs::other_view`; an error
+    /// for a batch made without). Only a slot playing after that run has one, and only where
+    /// `Views::viewer` is not below zero.
+    pub fn read_other_views(&mut self) -> Result<Views, String> {
+        let mut views = Views::new(self.games, self.caps.0);
+        // SAFETY: `views` has room for one view of the batch's tile capacity per slot, which
+        // the C side writes.
+        check(unsafe { ef_cuda_read_other_views(self.handle, views.as_mut_ptr()) })?;
+        Ok(views)
     }
 }
 

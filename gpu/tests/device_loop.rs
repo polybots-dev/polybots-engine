@@ -9,6 +9,8 @@
 #![cfg(feature = "cuda")]
 
 use engine_fast::reset::Config;
+use engine_fast::view::View;
+use engine_fast_batch::outputs::view_rows;
 use engine_fast_batch::{Applied, Batch, Status, SKIP};
 use engine_fast_gpu::batch::GpuBatch;
 use engine_fast_gpu::device::{peek, Buffer, Exports, Outputs};
@@ -43,15 +45,70 @@ fn configs_of(slots: usize, size: i32, seed: i32, tribes: &[i32]) -> Vec<(usize,
 }
 
 /// Everything the batch exports, copied from the device through the exported layout.
+#[derive(PartialEq)]
 struct Read {
     status: Vec<i32>,
     counts: Vec<i32>,
     applied: Vec<i32>,
     rows: Vec<Vec<[i32; 6]>>,
+    views: ViewRead,
+}
+
+/// One view's exported arrays per slot: planes, scalars, players and tech.
+#[derive(PartialEq, Debug)]
+struct ViewRead {
     tiles: Vec<Vec<i16>>,
     scalars: Vec<[i32; 3]>,
     players: Vec<[i64; 16]>,
     tech: Vec<Vec<i16>>,
+}
+
+/// Slots `first..first + n` of the view arrays at these addresses (the mover's `tiles`,
+/// `scalars`, `players`, `tech`, or the other seat's).
+fn read_view(x: &Exports, at: [u64; 4], first: usize, n: usize) -> ViewRead {
+    let f = first as u64;
+    let tiles = (f..f + n as u64)
+        .map(|g| {
+            let mut t = vec![0i16; (x.planes * x.cells) as usize];
+            peek(at[0] + g * x.view_stride, &mut t).unwrap();
+            t
+        })
+        .collect();
+    let mut scalars = vec![[0i32; 3]; n];
+    let mut players = vec![[0i64; 16]; n];
+    let mut tech_flat = vec![0i16; n * x.techs as usize];
+    peek(at[1] + 12 * f, &mut scalars).unwrap();
+    peek(at[2] + 128 * f, &mut players).unwrap();
+    peek(at[3] + 2 * f * x.techs as u64, &mut tech_flat).unwrap();
+    let tech = tech_flat
+        .chunks(x.techs.max(1) as usize)
+        .map(|c| c.to_vec())
+        .collect();
+    ViewRead {
+        tiles,
+        scalars,
+        players,
+        tech,
+    }
+}
+
+/// A view's expected arrays in the Python package's layout (-1 for none).
+fn expected_view(v: Option<&View>, x: &Exports) -> (Vec<i16>, [i32; 3], [i64; 16], Vec<i16>) {
+    let mut tiles = vec![-1i16; (x.planes * x.cells) as usize];
+    let mut scalars = [-1i32; 3];
+    let mut players = [-1i64; 16];
+    let mut tech = vec![-1i16; x.techs as usize];
+    if let Some(v) = v {
+        view_rows(v, &mut tiles, &mut scalars, &mut players, &mut tech).unwrap();
+    }
+    (tiles, scalars, players, tech)
+}
+
+fn assert_view(r: &ViewRead, k: usize, want: (Vec<i16>, [i32; 3], [i64; 16], Vec<i16>), at: &str) {
+    assert!(r.tiles[k] == want.0, "{at}: planes");
+    assert_eq!(r.scalars[k], want.1, "{at}: scalars");
+    assert_eq!(r.players[k], want.2, "{at}: players");
+    assert_eq!(r.tech[k], want.3, "{at}: tech");
 }
 
 /// Slots `first..first + n` of the exports.
@@ -63,35 +120,19 @@ fn read(x: &Exports, first: usize, n: usize) -> Read {
     peek(x.status + 4 * f, &mut status).unwrap();
     peek(x.counts + 4 * f, &mut counts).unwrap();
     peek(x.applied + 4 * f, &mut applied).unwrap();
-    let mut rows = Vec::new();
-    let mut tiles = Vec::new();
-    for g in f..f + n as u64 {
-        let mut r = vec![[0i32; 6]; x.max_rows as usize];
-        peek(x.rows + g * x.menu_stride, &mut r).unwrap();
-        rows.push(r);
-        let mut t = vec![0i16; (x.planes * x.cells) as usize];
-        peek(x.tiles + g * x.view_stride, &mut t).unwrap();
-        tiles.push(t);
-    }
-    let mut scalars = vec![[0i32; 3]; n];
-    let mut players = vec![[0i64; 16]; n];
-    let mut tech_flat = vec![0i16; n * x.techs as usize];
-    peek(x.scalars + 12 * f, &mut scalars).unwrap();
-    peek(x.players + 128 * f, &mut players).unwrap();
-    peek(x.tech + 2 * f * x.techs as u64, &mut tech_flat).unwrap();
-    let tech = tech_flat
-        .chunks(x.techs.max(1) as usize)
-        .map(|c| c.to_vec())
+    let rows = (f..f + n as u64)
+        .map(|g| {
+            let mut r = vec![[0i32; 6]; x.max_rows as usize];
+            peek(x.rows + g * x.menu_stride, &mut r).unwrap();
+            r
+        })
         .collect();
     Read {
         status,
         counts,
         applied,
         rows,
-        tiles,
-        scalars,
-        players,
-        tech,
+        views: read_view(x, [x.tiles, x.scalars, x.players, x.tech], first, n),
     }
 }
 
@@ -102,6 +143,15 @@ fn compare(cpu: &Batch, x: &Exports, first: usize, at: &str) {
     let n = cpu.len();
     let r = read(x, first, n);
     let cells = x.cells as usize;
+    let other = (x.other_tiles != 0).then(|| {
+        let at = [
+            x.other_tiles,
+            x.other_scalars,
+            x.other_players,
+            x.other_tech,
+        ];
+        read_view(x, at, first, n)
+    });
     for k in 0..n {
         let s = cpu.status(k);
         assert_eq!(
@@ -121,27 +171,21 @@ fn compare(cpu: &Batch, x: &Exports, first: usize, at: &str) {
             r.rows[k][want.len()..].iter().all(|row| *row == [0; 6]),
             "{at}, slot {k}: a row past the count is not cleared"
         );
-        let mut tiles = vec![-1i16; x.planes as usize * cells];
-        let mut scalars = [-1i32; 3];
-        let mut players = [-1i64; 16];
-        let mut tech = vec![-1i16; x.techs as usize];
-        if let Some(v) = cpu.view(k) {
-            tiles.copy_from_slice(&v.tiles);
-            scalars = [i32::from(v.viewer), v.turn, v.stars];
-            for (p, q) in v.players.iter().enumerate() {
-                players[p * 4..p * 4 + 4].copy_from_slice(&[
-                    i64::from(q.seat),
-                    i64::from(q.tribe),
-                    i64::from(q.relation),
-                    q.score,
-                ]);
-            }
-            tech[..v.tech.len()].copy_from_slice(&v.tech);
+        assert_view(
+            &r.views,
+            k,
+            expected_view(cpu.view(k), x),
+            &format!("{at}, slot {k}: view"),
+        );
+        if let Some(o) = &other {
+            let want = cpu.other_view(k).unwrap();
+            assert_view(
+                o,
+                k,
+                expected_view(want.as_ref(), x),
+                &format!("{at}, slot {k}: other view"),
+            );
         }
-        assert!(r.tiles[k] == tiles, "{at}, slot {k}: view planes");
-        assert_eq!(r.scalars[k], scalars, "{at}, slot {k}: scalars");
-        assert_eq!(r.players[k], players, "{at}, slot {k}: players");
-        assert_eq!(r.tech[k], tech, "{at}, slot {k}: tech");
         if x.previews != 0 {
             let mut pv = vec![[0i16; 4]; x.max_rows as usize];
             peek(
@@ -226,8 +270,8 @@ fn lockstep_of(
     let x = gpu.exports().unwrap();
     assert_eq!(x.cells, size * size);
     assert_eq!(
-        (x.previews != 0, x.defence != 0),
-        (outputs.previews, outputs.defence)
+        (x.previews != 0, x.defence != 0, x.other_tiles != 0),
+        (outputs.previews, outputs.defence, outputs.other_view)
     );
     compare(&cpu, &x, first, &format!("size {size}, after the reset"));
     let mut actions = Buffer::new(4 * total as u64).unwrap();
@@ -338,17 +382,85 @@ fn a_big_batch_equals_the_cpu_batch() {
     );
 }
 
-/// The optional outputs: with them asked for, the attack
-/// previews and the defence plane, read in place, equal the CPU batch's on boards 11, 16 and 20.
+/// The optional outputs: with them asked for, the attack previews, the defence plane and the other seat's
+/// view, read in place, equal the CPU batch's on boards 8, 11, 16 and 20.
 #[test]
 fn the_device_outputs_equal_the_cpu_batch() {
-    let both = Outputs {
+    let all = Outputs {
         previews: true,
         defence: true,
+        other_view: true,
     };
-    lockstep(11, 24, 160, both);
-    lockstep(16, 16, 160, both);
-    lockstep(20, 12, 120, both);
+    lockstep(8, 24, 200, all);
+    lockstep(11, 24, 160, all);
+    lockstep(16, 16, 160, all);
+    lockstep(20, 12, 120, all);
+}
+
+/// Asking for the other seat's view changes no other exported array, and its memory is apart
+/// from every other array: two batches of the same games and actions, one with it and one
+/// without, export the same bytes at every step.
+#[test]
+fn the_other_view_changes_no_other_array() {
+    for size in [8, 11] {
+        let slots = 24;
+        let made = |other_view| {
+            let o = Outputs {
+                previews: true,
+                defence: true,
+                other_view,
+            };
+            GpuBatch::with_outputs(CATALOG, slots, 4, size as usize, o).unwrap()
+        };
+        let (mut with, mut without) = (made(true), made(false));
+        let starts = configs(slots, size, 5100 + size);
+        with.reset(&starts).unwrap();
+        without.reset(&starts).unwrap();
+        let (xw, xo) = (with.exports().unwrap(), without.exports().unwrap());
+        assert!(xw.other_tiles != 0 && xo.other_tiles == 0);
+        // the other view's planes lie outside the mover's views (one block per slot)
+        let views = xw.tiles..xw.tiles + slots as u64 * xw.view_stride;
+        let other = xw.other_tiles..xw.other_tiles + slots as u64 * xw.view_stride;
+        assert!(other.end <= views.start || views.end <= other.start);
+        let extras = |x: &Exports| {
+            let mut pv = vec![[0i16; 4]; slots * x.max_rows as usize];
+            let mut dp = vec![0i16; slots * x.cells as usize];
+            peek(x.previews, &mut pv).unwrap();
+            peek(x.defence, &mut dp).unwrap();
+            (pv, dp)
+        };
+        let mut actions = Buffer::new(4 * slots as u64).unwrap();
+        let mut rng = 0x5EED_u64 ^ size as u64;
+        for call in 0..150 {
+            let a = read(&xw, 0, slots);
+            assert!(
+                a == read(&xo, 0, slots),
+                "size {size}, call {call}: the exports differ"
+            );
+            assert!(
+                extras(&xw) == extras(&xo),
+                "size {size}, call {call}: the outputs differ"
+            );
+            let moves: Vec<i32> = (0..slots)
+                .map(|k| {
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let n = a.counts[k];
+                    if a.status[k] != Status::Playing as i32 || n == 0 {
+                        SKIP
+                    } else {
+                        ((rng >> 33) % n as u64) as i32
+                    }
+                })
+                .collect();
+            actions.write(&moves).unwrap();
+            assert_eq!(
+                with.step_device(actions.ptr, actions.bytes).unwrap(),
+                without.step_device(actions.ptr, actions.bytes).unwrap()
+            );
+        }
+    }
 }
 
 /// The copy guard: a device step copies nothing to the device and the same few bytes to the
@@ -411,10 +523,7 @@ fn a_launched_step_equals_a_waited_one() {
         assert_eq!(a.counts, b.counts, "counts at step {s}");
         assert_eq!(a.applied, b.applied, "applied at step {s}");
         assert_eq!(a.rows, b.rows, "rows at step {s}");
-        assert_eq!(a.tiles, b.tiles, "views at step {s}");
-        assert_eq!(a.scalars, b.scalars, "scalars at step {s}");
-        assert_eq!(a.players, b.players, "players at step {s}");
-        assert_eq!(a.tech, b.tech, "tech at step {s}");
+        assert_eq!(a.views, b.views, "views at step {s}");
         if s % 16 == 15 {
             for gpu in [&mut waited, &mut launched] {
                 gpu.sync().unwrap();

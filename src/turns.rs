@@ -273,6 +273,50 @@ pub fn winner(g: &mut Game) -> Result<(i32, bool), String> {
     Ok((ids[selected], completed))
 }
 
+/// The index of the first player after `from` in turn order that `keep` takes (the search
+/// wraps past the last seat, and then `from` itself comes last), and whether it wrapped; None when `keep` takes nobody.
+fn next_index(
+    g: &Game,
+    from: usize,
+    keep: impl Fn(i32) -> Result<bool, String>,
+) -> Result<Option<(usize, bool)>, String> {
+    let kept: Seats<bool> = g
+        .players
+        .iter()
+        .map(|q| keep(q.action.id))
+        .collect::<Result<_, _>>()?;
+    if !kept.iter().any(|&k| k) {
+        return Ok(None);
+    }
+    let mut index = from;
+    let mut wrapped = false;
+    loop {
+        index += 1;
+        if index >= kept.len() {
+            index = 0;
+            wrapped = true;
+        }
+        if kept[index] {
+            return Ok(Some((index, wrapped)));
+        }
+    }
+}
+
+/// The seat of the batch's `other_view` output: the
+/// next player after the one to move in turn order, as EndTurn passes the turn: alive and not
+/// Nature. When every other player is dead (the game then ends at the mover's EndTurn) it is
+/// the next of them all the same; None only in a game of one player.
+pub fn other_seat(g: &Game) -> Result<Option<i32>, String> {
+    let from = g.current_player_index as usize;
+    let mover = g.players.get(from).ok_or("no player to move")?.action.id;
+    let other = |q: i32| q != mover && q != 255;
+    let next = match next_index(g, from, |q| Ok(other(q) && alive(g, q)?))? {
+        Some(n) => Some(n),
+        None => next_index(g, from, |q| Ok(other(q)))?,
+    };
+    Ok(next.map(|(i, _)| g.players[i].action.id))
+}
+
 /// The EndTurn turn effect
 pub fn end_turn(g: &mut Game, p: i32, out: &mut Vec<Action>) -> Result<(), String> {
     let i = player_index(g, p)?;
@@ -283,26 +327,8 @@ pub fn end_turn(g: &mut Game, p: i32, out: &mut Vec<Action>) -> Result<(), Strin
     }
     let current = g.players[g.current_player_index as usize].action.id;
     if p == current {
-        let alive: Seats<bool> = g
-            .players
-            .iter()
-            .map(|q| alive(g, q.action.id))
-            .collect::<Result<_, _>>()?;
-        if !alive.iter().any(|&a| a) {
-            return Err("no player alive".into());
-        }
-        let mut index = g.current_player_index as usize;
-        let mut wrapped = false;
-        loop {
-            index += 1;
-            if index >= alive.len() {
-                index = 0;
-                wrapped = true;
-            }
-            if alive[index] {
-                break;
-            }
-        }
+        let (index, wrapped) = next_index(g, g.current_player_index as usize, |q| alive(g, q))?
+            .ok_or("no player alive")?;
         g.current_player_index = index as i32;
         g.current_turn += i32::from(wrapped);
     }

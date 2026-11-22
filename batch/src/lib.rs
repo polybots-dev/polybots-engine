@@ -10,6 +10,7 @@
 //! alone, with its reason, while the rest play on.
 
 pub mod outputs;
+pub mod table;
 
 use engine_fast::menu::{self, Cand};
 use engine_fast::reset::{self, Config};
@@ -30,7 +31,7 @@ pub const MOVE_FIELDS: [&str; 6] = ["kind", "source", "target", "option", "oppon
 pub type Move = [i32; 6];
 
 /// The command kinds a move's first field can hold, by name.
-pub const KINDS: [(&str, i32); 23] = [
+pub const KINDS: [(&str, i32); 29] = [
     ("Build", 1),
     ("Attack", 2),
     ("Recover", 3),
@@ -54,13 +55,19 @@ pub const KINDS: [(&str, i32); 23] = [
     ("EstablishEmbassy", 30),
     ("Resign", 35),
     ("Disembark", 36),
+    ("FreezeArea", 17),
+    ("BreakIce", 18),
+    ("Explode", 24),
+    ("Boost", 25),
+    ("Swarm", 38),
+    ("ClearTileEffect", 39),
 ];
 
 /// Where a slot stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Status {
-    /// no game has been started in the slot
+    /// no game has been started in the slot, or the loaded game waits for another player
     #[default]
     Empty = 0,
     /// a player is to move: the view and legal moves are current
@@ -88,12 +95,25 @@ pub enum Applied {
     Rejected = 2,
 }
 
+/// What `Batch::load` read from a serialized state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Loaded {
+    /// the player id of the account the state was loaded for
+    pub seat: i32,
+    /// the number of commands the state holds: the index the next command is sent with
+    pub commands: usize,
+    /// the board's side
+    pub width: i32,
+}
+
 /// The move index that leaves a slot as it is.
 pub const SKIP: i32 = -1;
 
 #[derive(Default)]
 struct Slot {
     game: Option<Game>,
+    /// for a game put in with `load`: the one player the slot plays for
+    seat: Option<i32>,
     status: Status,
     reason: String,
     winner: i32,
@@ -161,7 +181,15 @@ impl Slot {
             self.status = Status::Truncated;
             return Ok(());
         }
-        let mover = g.players[g.current_player_index as usize].action.id;
+        let mover = (g.players.get(g.current_player_index as usize))
+            .ok_or("the current player is not in the game")?
+            .action
+            .id;
+        // a loaded game shows only its own player's turns: no view or moves of another's
+        if self.seat.is_some_and(|seat| seat != mover) {
+            self.stop(Status::Empty, String::new());
+            return Ok(());
+        }
         view::write_kept(g, t, mover, &mut self.view, &mut self.view_kept)?;
         self.offered = menu::menu(g, t)?;
         // a player to move always has a move; a game without one could never go on
@@ -241,6 +269,7 @@ impl Batch {
             let Some(config) = config else { return };
             slot.guarded(|slot| {
                 // (before the reset: a refused reset leaves nothing of the previous game)
+                slot.seat = None;
                 slot.game = Some(reset::reset(config, catalog, t)?);
                 slot.reason.clear();
                 slot.refresh(t)
@@ -251,6 +280,61 @@ impl Batch {
             None => self.slots.iter_mut().zip(starts).for_each(start),
         }
         Ok(())
+    }
+
+    /// Put a serialized multiplayer state (`engine_fast::wire`) in a slot, for the player
+    /// whose account id is `account`. The slot plays only while that player is to move, so its
+    /// view and legal moves are that player's own; while another player is to move it is
+    /// `Empty`, also after a `step` passes the turn on. A state the engine does not take
+    /// refuses the slot, as in `reset`. A `step` here plays on the whole state, hidden parts
+    /// included: its result is a local what-if and must not inform a move in the live game.
+    pub fn load(&mut self, slot: usize, wire: &[u8], account: [u8; 16]) -> Result<Loaded, String> {
+        let decoded = engine_fast::wire::decode(wire)?;
+        let seats: Vec<i32> = (decoded.accounts.iter())
+            .filter(|&&(id, held)| id != 255 && held == account)
+            .map(|&(id, _)| id)
+            .collect();
+        let &[seat] = seats.as_slice() else {
+            return Err("the account has no seat of its own in this game".into());
+        };
+        let loaded = Loaded {
+            seat,
+            commands: decoded.commands.len(),
+            width: decoded.game.width,
+        };
+        let t = &self.tables;
+        let slot = self.slots.get_mut(slot).ok_or("slot out of range")?;
+        slot.guarded(|slot| {
+            slot.reason.clear();
+            slot.seat = Some(seat);
+            slot.game = Some(decoded.game);
+            slot.refresh(t)
+        });
+        Ok(loaded)
+    }
+
+    /// Empty a slot.
+    pub fn clear(&mut self, slot: usize) {
+        if let Some(slot) = self.slots.get_mut(slot) {
+            slot.stop(Status::Empty, String::new());
+        }
+    }
+
+    /// The slot's legal move `index` as the serialized command the backend takes.
+    pub fn command(&self, slot: usize, index: usize) -> Result<Vec<u8>, String> {
+        let slot = self.slots.get(slot).ok_or("slot out of range")?;
+        let game = (slot.game.as_ref())
+            .filter(|_| slot.status == Status::Playing)
+            .ok_or("the slot is not playing")?;
+        let offered = slot
+            .offered
+            .get(index)
+            .ok_or("no legal move of that index")?;
+        // the game came from outside: a broken invariant is an error here, not a panic
+        catch_unwind(AssertUnwindSafe(|| {
+            engine_fast::wire::encode(game, &self.tables, &offered.action)
+        }))
+        .unwrap_or_else(|_| Err("the engine failed writing the command".into()))
     }
 
     /// Apply one move per slot: an index into the slot's legal moves, or `SKIP`.

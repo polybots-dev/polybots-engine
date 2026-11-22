@@ -436,6 +436,9 @@ impl Tables {
     }
 }
 
+/// Units, improvements and techs have ids below this (the fixed action table's id blocks).
+pub const MAX_ID_BLOCK: usize = 64;
+
 impl Tables {
     /// Compiles the catalog JSON text carried in a checkpoint (`game.catalog_json`).
     pub fn compile(catalog_json: &str) -> Result<Tables, String> {
@@ -496,6 +499,19 @@ impl Tables {
         if 2 * (furthest as usize + 2) + 1 > crate::action::PATH_TILES {
             return Err("a unit moves further than a move path holds".into());
         }
+        // the fixed action table gives units, improvements and techs 64 slots each: a larger id would need a new layout
+        let ids = |idx: Vec<usize>, what: &str| match idx.into_iter().max() {
+            Some(i) if i >= MAX_ID_BLOCK => {
+                Err(format!("{what} id {i} past the action table's 64"))
+            }
+            _ => Ok(()),
+        };
+        ids(c.unit_data.values().map(|e| e.idx).collect(), "unit")?;
+        ids(
+            c.improvement_data.values().map(|e| e.idx).collect(),
+            "improvement",
+        )?;
+        ids(c.tech_data.values().map(|e| e.idx).collect(), "tech")?;
         Ok(Tables {
             source: text_digest(catalog_json),
             tribes: Section::build(c.tribe_data, |e| e.idx, "tribes")?,
@@ -900,6 +916,30 @@ mod tests {
                 "{name} has no ability bit"
             );
             assert!(!super::unlocks(0, name), "{name}");
+        }
+    }
+
+    /// S3: rule data with a unit, improvement or tech id past the action table's blocks is
+    /// refused at load; the rule data in use loads.
+    #[test]
+    fn ids_past_the_action_table_are_refused() {
+        let text = include_str!(env!("ENGINE_FAST_RULES"));
+        assert!(super::Tables::compile(text).is_ok());
+        for section in ["unitData", "improvementData", "techData"] {
+            let mut c: serde_json::Value = serde_json::from_str(text).unwrap();
+            let first = c[section]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap();
+            first["idx"] = serde_json::json!(super::MAX_ID_BLOCK);
+            let e = super::Tables::compile(&c.to_string()).err();
+            assert!(
+                e.as_deref()
+                    .is_some_and(|e| e.contains("past the action table")),
+                "{section}: {e:?}"
+            );
         }
     }
 

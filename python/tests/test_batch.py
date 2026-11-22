@@ -6,7 +6,9 @@ crate's tests check the batch against the single-game path. They read the rule d
 ENGINE_FAST_RULES (README.md).
 """
 
+import struct
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -227,6 +229,146 @@ class OutputsTest(unittest.TestCase):
         for output in ("income", "max_health"):
             with self.assertRaisesRegex(ValueError, "cpu backend only"):
                 engine_fast.Batch(games=1, backend="gpu", outputs=(output,))
+
+
+
+class OtherView(unittest.TestCase):
+    """The other seat's view (`outputs=("other_view",)`), a privileged critic's input: laid out
+    as `views`, it is the view of the seat the turn passes to next (in a 2-seat game the other
+    player), -1 in slots not playing, and every other array is the same with and without it.
+    Its values are checked against the view function in the batch crate's
+    `tests/other_view.rs`."""
+
+    def test_layout_seat_and_every_other_array_unchanged(self):
+        games, size = 5, 8
+        made = [engine_fast.Batch(games=games + 1, size=size, workers=2, outputs=o) for o in (("other_view",), ())]
+        for batch in made:
+            batch.reset(np.arange(games), np.arange(21, 21 + games), [7, 7])
+        with_it, without = made
+        viewer = engine_fast.SCALAR_FIELDS.index("viewer")
+        rng = np.random.default_rng(5)
+        for _ in range(200):
+            status = with_it.status()
+            offsets, moves = with_it.moves()
+            arrays = [status, offsets, moves, *with_it.views(), with_it.winner()]
+            others = [without.status(), *without.moves(), *without.views(), without.winner()]
+            for a, b in zip(arrays, others):
+                np.testing.assert_array_equal(a, b)
+            other = with_it.other_views()
+            for a, b in zip(other, arrays[3:7]):
+                self.assertEqual((a.dtype, a.shape), (b.dtype, b.shape))
+            playing = status == 1
+            self.assertTrue(all((a[~playing] == -1).all() for a in other))
+            # two seats, ids 1 and 2: the other seat is the player not to move
+            mover = arrays[4][:, viewer]
+            self.assertTrue((other[1][playing, viewer] == 3 - mover[playing]).all())
+            choice = choose(offsets, moves, status, rng)
+            np.testing.assert_array_equal(with_it.step(choice), without.step(choice))
+        with self.assertRaisesRegex(ValueError, "other_view"):
+            without.other_views()
+
+
+class TableTest(unittest.TestCase):
+    """The fixed action table from Python: the mask is the legal list's rows encoded, decode
+    inverts encode, and stepping by slot plays as stepping by index. The table itself is
+    checked in the batch crate (`src/table.rs`, `tests/table.rs`)."""
+
+    def test_masks_rows_and_frames_agree_with_the_list(self):
+        games, size = 3, 11
+        batch = engine_fast.Batch(games=games + 1, size=size)
+        batch.reset(np.arange(games), np.arange(1, games + 1), [7, 3, 16])
+        words = -(-engine_fast.table_slots(size) // 32)
+        self.assertEqual(engine_fast.table_blocks(size)[-1], engine_fast.table_slots(size))
+        rng = np.random.default_rng(5)
+        for _ in range(60):
+            status = batch.status()
+            offsets, moves = batch.moves()
+            masks, rows, frames = batch.masks(), batch.table_rows(), batch.table_frames()
+            self.assertEqual((masks.dtype, masks.shape), (np.uint32, (games + 1, words)))
+            self.assertEqual(len(rows), len(moves))
+            self.assertTrue((masks[games] == 0).all() and (frames[games] == -1).all())
+            for g in np.flatnonzero(status == 1):
+                side, mover, seats = frames[g]
+                legal = moves[offsets[g]:offsets[g + 1]]
+                slots = engine_fast.table_encode(legal, side, mover, seats)
+                self.assertTrue((slots == rows[offsets[g]:offsets[g + 1]]).all())
+                bits = np.unpackbits(masks[g].view(np.uint8), bitorder="little")
+                self.assertEqual(set(np.flatnonzero(bits)), set(slots.tolist()))
+                back = engine_fast.table_decode(slots, side, mover, seats)
+                self.assertTrue((back == legal[:, :5]).all())
+            batch.step(choose(offsets, moves, status, rng))
+        self.assertTrue((engine_fast.table_decode([-1, 10**9], 11, 1, 2) == -1).all())
+        with self.assertRaises(ValueError):
+            engine_fast.table_encode(np.array([[6, 3, 3, -1, -1]], dtype=np.int32), 11, 1, 2)
+        self.assertIn("action-table v1", engine_fast.TABLE_SCHEMA)
+
+    def test_stepping_by_slot_equals_stepping_by_index(self):
+        def batch():
+            b = engine_fast.Batch(games=3, size=11)
+            b.reset(np.arange(3), np.arange(11, 14), [7, 2])
+            return b
+        by_index, by_slot = batch(), batch()
+        rng = np.random.default_rng(9)
+        for _ in range(80):
+            status = by_index.status()
+            offsets, moves = by_index.moves()
+            choice = choose(offsets, moves, status, rng)
+            rows = by_index.table_rows()
+            slots = np.full(3, engine_fast.SKIP, dtype=np.int64)
+            for g in np.flatnonzero(choice != engine_fast.SKIP):
+                slots[g] = rows[offsets[g] + choice[g]]
+            self.assertTrue((by_index.step(choice) == by_slot.step_table(slots)).all())
+            for a, b in zip(by_index.views(), by_slot.views()):
+                self.assertTrue((a == b).all())
+            self.assertTrue((by_slot.moves()[1] == by_index.moves()[1]).all())
+
+
+class Load(unittest.TestCase):
+    """A multiplayer state in a slot: the engine's stored state (a seeded two-seat game, 11 by
+    11, placeholder account ids), with the rules version the backend puts in front."""
+
+    VERSION = struct.pack("<i", 124)
+    ACCOUNTS = {1: "01010101-0101-0101-0101-010101010101", 2: "02020202020202020202020202020202"}
+
+    def setUp(self):
+        stored = Path(__file__).resolve().parents[2] / "tests" / "data" / "state.hex"
+        self.state = self.VERSION + bytes.fromhex(stored.read_text())
+
+    def test_the_slot_plays_for_the_account_to_move_only(self):
+        batch = engine_fast.Batch(games=1, size=11)
+        statuses = []
+        for seat, account in self.ACCOUNTS.items():
+            self.assertEqual(batch.load(0, self.state, account), (seat, 235))
+            statuses.append(int(batch.status()[0]))
+            offsets, moves = batch.moves()
+            if statuses[-1] == 1:
+                self.assertGreater(len(moves), 1)
+                for index in range(len(moves)):
+                    command = batch.command(0, index)
+                    self.assertEqual(command[:4], self.VERSION)
+                    self.assertEqual((command[4], command[6]), (moves[index, 0], seat))
+                with self.assertRaises(ValueError):
+                    batch.command(0, len(moves))
+            else:
+                self.assertEqual(len(moves), 0)
+                with self.assertRaises(ValueError):
+                    batch.command(0, 0)
+        self.assertEqual(sorted(statuses), [0, 1])
+
+    def test_what_is_refused(self):
+        batch = engine_fast.Batch(games=1, size=11)
+        refused = [
+            (struct.pack("<i", 123) + self.state[4:], self.ACCOUNTS[1]),  # another version in front
+            (self.state[:200], self.ACCOUNTS[1]),  # not a whole state
+            (self.state, "09090909-0909-0909-0909-090909090909"),  # an account with no seat
+            (self.state, "not an account id"),
+        ]
+        for state, account in refused:
+            with self.assertRaises(ValueError):
+                batch.load(0, state, account)
+        with self.assertRaises(ValueError):  # a batch of another board size
+            engine_fast.Batch(games=1, size=14).load(0, self.state, self.ACCOUNTS[1])
+        self.assertEqual(int(batch.status()[0]), 0)
 
 
 if __name__ == "__main__":

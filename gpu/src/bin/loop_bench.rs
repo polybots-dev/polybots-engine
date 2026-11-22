@@ -385,6 +385,7 @@ fn main() {
         let wanted = Outputs {
             previews: outputs == 1,
             defence: outputs == 1,
+            other_view: false,
         };
         let free_before = engine_fast_gpu::device::memory().unwrap().0;
         let mut b = GpuBatch::with_outputs(CATALOG, games, workers, size, wanted).unwrap();

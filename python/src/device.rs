@@ -62,7 +62,9 @@ impl DeviceArray {
 /// `tiles` (int16 `[games, len(TILE_PLANES), size * size]`), `scalars` (int32 `[games,
 /// len(SCALAR_FIELDS)]`), `players` (int64 `[games, 4, len(PLAYER_FIELDS)]`) and `tech`
 /// (int16 `[games, technology ids]`), laid out as the host calls hand them out (-1 rows for
-/// slots not playing).
+/// slots not playing); with the optional outputs also `previews`, `defence`, and the other
+/// seat's view as `other_tiles`, `other_scalars`, `other_players` and `other_tech`, laid out
+/// as the mover's (`other_views`).
 pub fn arrays<'py>(
     py: Python<'py>,
     owner: PyObject,
@@ -118,6 +120,38 @@ pub fn arrays<'py>(
             None,
             x.defence,
         ));
+    }
+    if x.other_tiles != 0 {
+        list.extend([
+            (
+                "other_tiles".to_owned(),
+                "<i2",
+                vec![g, x.planes as u64, x.cells as u64],
+                Some(vec![x.view_stride, 2 * x.cells as u64, 2]),
+                x.other_tiles,
+            ),
+            (
+                "other_scalars".to_owned(),
+                "<i4",
+                vec![g, 3],
+                None,
+                x.other_scalars,
+            ),
+            (
+                "other_players".to_owned(),
+                "<i8",
+                vec![g, 4, 4],
+                None,
+                x.other_players,
+            ),
+            (
+                "other_tech".to_owned(),
+                "<i2",
+                vec![g, x.techs as u64],
+                None,
+                x.other_tech,
+            ),
+        ]);
     }
     let d = PyDict::new(py);
     for (name, typestr, shape, strides, ptr) in list {
