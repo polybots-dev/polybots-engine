@@ -24,15 +24,35 @@ between you read each game's status, its legal moves and the view of the player 
 ## Install
 
 Python 3.11 or later; pip installs numpy 2.1 or later with the package. The repository's
-`wheels/` folder has built packages; from the repository's top folder:
+release has built packages:
+
+Windows x86_64:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-win_amd64.whl
+
+Linux x86_64:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl
+
+Linux arm64:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl
+
+macOS, Intel:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-macosx_11_0_x86_64.whl
+
+The repository's `wheels/` folder has two more; from the repository's top folder:
 
     pip install wheels/macos/engine_fast-0.1.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
-    pip install wheels/cpu/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl          # Linux x86_64, CPU
     pip install wheels/cuda/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
 
-The Linux wheels are not manylinux wheels (built with glibc 2.39), and the CUDA wheel runs on
-GPUs of compute capability 8.6 to 8.9 only, with a driver for CUDA 12; the main README has the
-details. Anywhere else, build from source with a Rust toolchain on the path, from the
+The release's Linux wheels need glibc 2.28 or later (Ubuntu 22.04: use its `python3.11`
+package, since its own Python is 3.10). The CUDA wheel is not a manylinux wheel (built with
+glibc 2.39) and runs on GPUs of compute capability 8.6 to 8.9 only, with a driver for CUDA 12.
+The main README has the details.
+
+Anywhere else, build from source with a Rust toolchain on the path, from the
 repository's top folder:
 
     pip install ./python

@@ -37,14 +37,41 @@ Further reading:
 
 ## Quick start
 
-Install a built Python package from `wheels/` (Python 3.11 or later):
+Install a built Python package (Python 3.11 or later). From the repository's release:
+
+Windows x86_64:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-win_amd64.whl
+
+Linux x86_64:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl
+
+Linux arm64:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl
+
+macOS, Intel:
+
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-macosx_11_0_x86_64.whl
+
+From a clone of the repository, in its top folder:
 
     pip install wheels/macos/engine_fast-0.1.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
-    pip install wheels/cpu/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl          # Linux x86_64, CPU
     pip install wheels/cuda/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
 
-- The Linux wheels were built on Ubuntu 24.04 (glibc 2.39) and are not manylinux wheels: on a
-  Linux with an older glibc they may install but fail to import.
+- The release's wheels (with their SHA-256 in its `SHA256SUMS`) are built and tested by
+  `.github/workflows/wheels.yml` on GitHub's machines. Each was installed on a clean machine and
+  ran the package tests and this README's example with no game data: Windows Server 2025 with
+  Python 3.11 and 3.13, Ubuntu 22.04 and AlmaLinux 8 (Linux x86_64), Ubuntu 22.04 (Linux arm64)
+  and macOS 15 (Intel).
+- The Linux wheels of the release need glibc 2.28 or later (Ubuntu 20.04, Debian 10, RHEL 8
+  and later; tested on Ubuntu 22.04 and AlmaLinux 8, the others by their glibc). Ubuntu
+  22.04's own Python is 3.10: install `python3.11` and `python3.11-venv` with apt (its
+  `python3.11` is 3.11.0rc1, on which the tests pass), make a venv with
+  `python3.11 -m venv venv`, and use the venv's `pip`.
+- The CUDA wheel in `wheels/cuda/` was built on Ubuntu 24.04 (glibc 2.39) and is not a
+  manylinux wheel: on a Linux with an older glibc it may install but fail to import.
 - The CUDA wheel is built for GPU architecture `sm_86` (compute capability 8.6: the RTX 30
   series, A10, A40) with CUDA 12, tested on an RTX 3090, and needs an NVIDIA driver for CUDA
   12. It carries no PTX, so by CUDA's rules it runs only on compute capability 8.6 to 8.9 (8.9,
@@ -132,7 +159,8 @@ it. Copy it out once:
 | `python/` | the Python package `engine_fast` (built with maturin) |
 | `rules/` | the rule data, in the engine's own format |
 | `tools/extract_rules.py` | copies the game's own rule data out of an installed game (optional) |
-| `wheels/` | built Python packages: `macos/` (arm64), `cpu/` and `cuda/` (Linux x86_64, `sm_86`) |
+| `wheels/` | built Python packages: `macos/` (arm64) and `cuda/` (Linux x86_64, `sm_86`); the other platforms' are the release's |
+| `.github/workflows/wheels.yml` | builds the Windows, Linux (manylinux) and Intel macOS wheels and tests each on a clean machine; run it from the Actions tab |
 
 `ARCHITECTURE.md` has a file-by-file map.
 
