@@ -1,0 +1,199 @@
+# Build the Python package's wheels for Windows, Linux (manylinux) and macOS, then install each
+# built wheel on clean machines and run the package tests and the READMEs' quick starts there,
+# with no game data. Run it by hand from the Actions tab; it needs no secrets and publishes
+# nothing: the wheels are the run's artifacts.
+name: wheels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # the SHA-256 of rules/rules-124.json as committed: every wheel must carry these exact bytes
+  RULES_SHA256: "35588a5fe3de6a893f71f443954717bb0cf7ccdfaf0607ea5c82154e772c2516"
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            python: /opt/python/cp311-cp311/bin/python
+            maturin: --compatibility manylinux_2_28
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            python: /opt/python/cp311-cp311/bin/python
+            maturin: --compatibility manylinux_2_28
+          - name: windows-x86_64
+            os: windows-2025
+            python: python
+          - name: macos-x86_64
+            os: macos-15-intel
+            python: python
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.container == null
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup toolchain install stable --profile minimal && rustup default stable
+          fi
+      - name: Build
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          # Git Bash on Windows must pass the remap flags to rustc as written
+          MSYS_NO_PATHCONV: "1"
+          MSYS2_ENV_CONV_EXCL: RUSTFLAGS
+        run: |
+          set -eu
+          rustc --version
+          "${{ matrix.python }}" -m pip install -q "maturin>=1.16,<2"
+          # panic messages name source files: name them without the builder's folders (rustc
+          # takes the last prefix that matches, so the widest comes first). On Windows rustc
+          # sees the paths in Windows form, and the linker would write the full .pdb path.
+          home=${USERPROFILE:-$HOME}
+          cargo_home=${CARGO_HOME:-$home/.cargo}
+          flags="--remap-path-prefix=$home=/build --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/engine-fast"
+          if [ "$RUNNER_OS" = Windows ]; then flags="$flags -Clink-arg=/PDBALTPATH:%_PDB%"; fi
+          printf '%s\n' "$home" "$cargo_home" "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/prefixes"
+          RUSTFLAGS="$flags" "${{ matrix.python }}" -m maturin build --release --locked \
+            -m python/Cargo.toml -i "${{ matrix.python }}" --out dist ${{ matrix.maturin }}
+      - name: No build paths in the wheel
+        shell: bash
+        run: |
+          "${{ matrix.python }}" - "$RUNNER_TEMP/prefixes" dist/*.whl <<'EOF'
+          import hashlib, sys, zipfile
+          prefixes = [p for p in open(sys.argv[1]).read().split("\n") if p]
+          probes = {v for p in prefixes for v in (p, p.replace("\\", "/"), p.replace("/", "\\"))}
+          found = []
+          for whl in sys.argv[2:]:
+              print(whl, hashlib.sha256(open(whl, "rb").read()).hexdigest())
+              with zipfile.ZipFile(whl) as z:
+                  for name in z.namelist():
+                      data = z.read(name).decode("latin-1").lower()
+                      found += [(name, p) for p in probes if p.lower() in data]
+          for name, p in found:
+              print("build path", p, "in", name)
+          sys.exit(1 if found else 0)
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  test:
+    name: test ${{ matrix.name }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 ships Python 3.10; its python3.11 package is what a user installs
+          - name: linux-x86_64 on Ubuntu 22.04
+            wheel: linux-x86_64
+            os: ubuntu-24.04
+            container: ubuntu:22.04
+            apt: true
+            python: python3.11
+          # the oldest system the wheel's tag allows (glibc 2.28)
+          - name: linux-x86_64 on manylinux_2_28
+            wheel: linux-x86_64
+            os: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            python: /opt/python/cp311-cp311/bin/python
+          - name: linux-aarch64 on Ubuntu 22.04
+            wheel: linux-aarch64
+            os: ubuntu-24.04-arm
+            container: ubuntu:22.04
+            apt: true
+            python: python3.11
+          - name: windows-x86_64, Python 3.11
+            wheel: windows-x86_64
+            os: windows-2025
+            setup: "3.11"
+            python: python
+          - name: windows-x86_64, Python 3.13
+            wheel: windows-x86_64
+            os: windows-2025
+            setup: "3.13"
+            python: python
+          - name: macos-x86_64, Python 3.11
+            wheel: macos-x86_64
+            os: macos-15-intel
+            setup: "3.11"
+            python: python
+    steps:
+      - if: matrix.apt
+        run: |
+          apt-get update -q
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3.11 python3.11-venv git ca-certificates
+      - uses: actions/checkout@v4
+      - if: matrix.setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.setup }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-${{ matrix.wheel }}
+          # in a container, runner.temp names the host's folder; the workspace is mounted
+          path: wheel
+      - name: Install the wheel in a fresh venv
+        shell: bash
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          "${{ matrix.python }}" -m venv venv
+          if [ -x venv/Scripts/python.exe ]; then py=venv/Scripts/python.exe; else py=venv/bin/python; fi
+          py=$RUNNER_TEMP/$py
+          echo "PY=$py" >> "$GITHUB_ENV"
+          "$py" -m pip install -q --upgrade pip
+          cd "$GITHUB_WORKSPACE"
+          sha256sum wheel/*.whl 2>/dev/null || shasum -a 256 wheel/*.whl
+          "$py" -m pip install wheel/*.whl
+          "$py" -m pip list
+      - name: Package tests and the quick starts, with no game data
+        shell: bash
+        run: |
+          set -eu
+          unset ENGINE_FAST_RULES
+          # outside the checkout, so the installed package is the one imported
+          cd "$RUNNER_TEMP"
+          "$PY" - "$GITHUB_WORKSPACE" <<'EOF'
+          import os, re, sys, unittest
+          from pathlib import Path
+          import engine_fast
+          tree = Path(sys.argv[1])
+          print("engine_fast from", engine_fast.__file__)
+          assert "site-packages" in engine_fast.__file__, "not the installed wheel"
+          assert engine_fast.RULES_SHA256 == os.environ["RULES_SHA256"], engine_fast.RULES_SHA256
+          result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.defaultTestLoader.discover(str(tree / "python" / "tests")))
+          if result.testsRun == 0 or not result.wasSuccessful():
+              sys.exit(f"package tests failed ({result.testsRun} run)")
+          for readme in ("README.md", "python/README.md"):
+              text = (tree / readme).read_text(encoding="utf-8")
+              example = re.search(r"```python\n(.*?)```", text, re.S).group(1)
+              print("running the quick start of", readme)
+              exec(compile(example, readme, "exec"), {})
+          print(f"ok: {result.testsRun} tests and both quick starts")
+          EOF

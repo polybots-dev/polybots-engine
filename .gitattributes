@@ -1,0 +1,2 @@
+# the rule file is hashed byte for byte, so no checkout may change its line endings
+* -text
