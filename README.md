@@ -37,9 +37,20 @@ Further reading:
 
 ## Quick start
 
-Install the Python package (it needs a Rust toolchain; see [Build and test](#build-and-test)):
+Install a built Python package from `wheels/` (Python 3.11 or later):
 
-    pip install ./python
+    pip install wheels/macos/engine_fast-0.1.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
+    pip install wheels/cpu/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl          # Linux x86_64, CPU
+    pip install wheels/cuda/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
+
+- The Linux wheels were built on Ubuntu 24.04 (glibc 2.39) and are not manylinux wheels: on a
+  Linux with an older glibc they may install but fail to import.
+- The CUDA wheel is built for GPU architecture `sm_86` (compute capability 8.6: the RTX 30
+  series, A10, A40) with CUDA 12, tested on an RTX 3090, and needs an NVIDIA driver for CUDA
+  12. It carries no PTX, so by CUDA's rules it runs only on compute capability 8.6 to 8.9 (8.9,
+  the RTX 40 series, is untested). For another GPU, an A100 (8.0) for example, build from
+  source with `EF_CUDA_ARCH` (see [Build and test](#build-and-test)).
+- Anywhere else, or to build from source (it needs a Rust toolchain): `pip install ./python`.
 
 Play 64 two-player games on an 11 x 11 board with random moves:
 
@@ -121,7 +132,7 @@ it. Copy it out once:
 | `python/` | the Python package `engine_fast` (built with maturin) |
 | `rules/` | the rule data, in the engine's own format |
 | `tools/extract_rules.py` | copies the game's own rule data out of an installed game (optional) |
-| `wheels/` | a built Python package for macOS arm64; elsewhere, `pip install ./python` |
+| `wheels/` | built Python packages: `macos/` (arm64), `cpu/` and `cuda/` (Linux x86_64, `sm_86`) |
 
 `ARCHITECTURE.md` has a file-by-file map.
 
