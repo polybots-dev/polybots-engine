@@ -154,11 +154,12 @@ For the Python package with the GPU backend, run `maturin build --release --feat
 
 ## Scope
 
-- Rules version 124. Two to four players. Not the Tutorial.
+- Rules version 124, the version the Python package plays. The Rust crates also take 123, the
+  version before, which uses the same rule data. Two to four players. Not the Tutorial.
 - Board sides 11 to 30, and 8 x 8 ("nano"): a board below the game's smallest, for quick
   experiments. The game's own map generator runs unchanged at that size.
 - Every tribe, the four special tribes (Aquarion, Elyrion, Polaris, Cymanti) included.
-- Non-default skins are refused.
+- New games use the default skins; a loaded live game keeps the skins its players chose.
 - No rewards: the view gives scores, and the status and winner give the outcome.
 
 ## What is checked
@@ -176,11 +177,13 @@ Not verified against recorded games:
 - **board sides 19 to 30** and **8 x 8**: random-play checks only;
 - **Continents and Pangea maps** beyond the recorded games' few;
 - the **rule queries and optional outputs** (attack previews, defence bonuses, income, maximum
-  health): compared on generated games, not on recorded ones.
+  health, the other seat's view) and the **action table**: compared on generated games, not
+  on recorded ones.
 
 The tests in this repository are the engine's own: digests of new games, move admission,
-allocation counts, the batch against single games, the GPU rules against the Rust engine, and
-the Python package. `ARCHITECTURE.md` lists what each one shows.
+allocation counts, loading stored states, the batch against single games, the optional
+outputs and the action table, the GPU rules against the Rust engine, and the Python
+package. `ARCHITECTURE.md` lists what each one shows.
 
 ## Disclaimer
 

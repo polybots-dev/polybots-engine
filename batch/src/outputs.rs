@@ -65,8 +65,8 @@ pub fn max_health_plane(g: &Game, t: &Tables, viewer: i32) -> Result<Vec<i16>, S
 }
 
 /// The other seat's view of `g` (`turns::other_seat`: the next player in turn order after
-/// the one to move): what `Batch::other_view` gives for a slot holding `g`. None when there is
-/// no other seat.
+/// the one to move): what `Batch::other_view` gives for a slot holding `g`. None in a game of
+/// one player.
 pub fn other_view(g: &Game, t: &Tables) -> Result<Option<View>, String> {
     let Some(seat) = turns::other_seat(g)? else {
         return Ok(None);
@@ -171,7 +171,7 @@ impl Batch {
 
     /// The view of the next seat in turn order after the player to move (`other_view`), for
     /// the privileged critic only: it shows what the mover's view hides. None when the slot is
-    /// not playing or no other seat is alive. Refused for a game put in with `load`, which is
+    /// not playing or the game has one player. Refused for a game put in with `load`, which is
     /// someone's live game: there the other seat's view is the opponent's hidden information.
     pub fn other_view(&self, slot: usize) -> Result<Option<View>, String> {
         if self.slots.get(slot).is_some_and(|s| s.seat.is_some()) {

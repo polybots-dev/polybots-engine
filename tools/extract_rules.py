@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Copy the game's rule data out of an installed copy of The Battle of Polytopia (optional).
 
-    python3 -m pip install UnityPy
+    python3 -m pip install UnityPy==1.25.4
     python3 tools/extract_rules.py "<game folder>" rules.json
     export ENGINE_FAST_RULES="$PWD/rules.json"
 
 The rule data is the game's text asset GameLogicData28, inside the game's `data.unity3d`.
-This reads that file only; it does not start or change the game. The engine implements one
-version of the rules, so the copy is checked against that version's SHA-256 and refused if
-the installed game carries other rules.
+This reads that file only; it does not start or change the game. The engine reads one rule
+data file (rules versions 123 and 124 share it), so the copy is checked against its SHA-256
+and refused if the installed game carries other rule data.
 """
 
 import argparse

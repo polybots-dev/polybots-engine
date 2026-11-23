@@ -86,8 +86,9 @@ This file goes from the top down:
 | --- | --- |
 | `frame/src/lib.rs` | value types shared by the crates: coordinates, actions, legal-list entries, attack previews |
 | `batch/src/lib.rs` | `Batch`: slots, `reset`, `step`, statuses, legal moves and views |
-| `batch/src/outputs.rs` | the batch's optional outputs (attack previews, defence, income, maximum health) |
-| `batch/src/bin/batch_bench.rs` | CPU throughput benchmark |
+| `batch/src/outputs.rs` | the batch's optional outputs (attack previews, defence, income, maximum health, the other seat's view) and stepping by action-table slot |
+| `batch/src/table.rs` | the action table: its layout (`SCHEMA`), encoding a legal move to a slot and back, the legal mask |
+| `batch/src/bin/batch_bench.rs`, `table_check.rs` | CPU throughput benchmark; the action table's coverage over random games |
 | `gpu/kernel/` | the rules in C: one header per area, mirroring `src/` (`step.h`, `menu.h`, `view.h`, ...); `twin.c` builds them for the host, `device.cu` for CUDA |
 | `gpu/src/state.rs`, `gpu/src/tables.rs` | a `Game` as a device block and back; the rule tables as a device block |
 | `gpu/src/batch.rs`, `gpu/src/device.rs` | `GpuBatch`, the batch interface on the GPU; device memory and copies |
@@ -95,7 +96,9 @@ This file goes from the top down:
 | `gpu/src/step.rs`, `menu.rs`, `view.rs`, `outputs.rs`, `action.rs`, `floats.rs`, `dump.rs` | the Rust side of each kernel area: calling the host build and converting its results, for the tests |
 | `gpu/src/check.rs` | plays a recorded game (a list of commands) through the host build, comparing every decision with the Rust engine |
 | `gpu/src/bin/` | GPU benchmarks: the step, the view, the batch and the whole device loop |
+| `gpu/build.rs` | builds the C rules for the host always, and for the GPU with the `cuda` feature |
 | `python/src/lib.rs` | the Python module `engine_fast` |
+| `python/src/device.rs` | the GPU batch's arrays handed to Python in place (CUDA array interface) |
 | `rules/rules-124.json` | the rules of version 124 in the engine's own format |
 | `tools/extract_rules.py` | copies the game's own rule data out of an installed game (optional) |
 
@@ -196,13 +199,15 @@ distributed.
 | `tests/wire.rs`, `batch/tests/load.rs` | a stored state (a seeded game with placeholder account ids) is read as pinned, what is not a whole state is refused, and a loaded slot plays for the account to move and for no other |
 | `batch/tests/matches_single_games.rs` | the batch plays each game exactly as the single-game calls do, at any number of threads |
 | `batch/tests/outputs.rs` | the income and maximum-health outputs equal the queries and a second statement of the rule |
+| `batch/tests/other_view.rs`, `gpu/tests/other_view.rs` | the other seat's view is the view of the player the turn passes to next, dead players skipped unless every other player is dead; the GPU's equals the CPU batch's |
+| `batch/tests/table.rs` | every legal move encodes to its own action-table slot and back, the mask holds exactly the legal moves, and stepping by slot plays as stepping by index |
 | `gpu/tests/step_lockstep.rs`, `menu_lockstep.rs`, `view.rs`, `special_lockstep.rs` | the C rules (host build, and the GPU with `cuda`) equal the Rust engine's step, legal moves and view at every decision of random games, special tribes included |
 | `gpu/tests/special_tribes.rs`, `naming.rs` | the special tribes' technology trees; city names drawn the same way on both sides |
 | `gpu/tests/state_roundtrip.rs`, `narrow.rs` | a game survives the trip to a device block and back; every narrowed field has a stated reason why its value fits |
 | `gpu/tests/float_conformance.rs` | every floating-point expression gives the same bits in Rust, the host build and the GPU |
 | `gpu/tests/batch_gpu.rs`, `device_loop.rs`, `restarts.rs` | the GPU batch equals the CPU batch slot for slot, through the host calls, the device arrays and restarts (needs `cuda` and a GPU) |
 | `gpu/tests/copies.rs` | no copy between host and device bypasses the byte counter |
-| `python/tests/test_batch.py` | the Python package: shapes and types, moves by index, slots stopping alone, independence from the number of workers, the optional outputs |
+| `python/tests/test_batch.py` | the Python package: shapes and types, moves by index, slots stopping alone, independence from the number of workers, the optional outputs, rule files and their refusal, the action table, loading a stored state |
 
 Random play is a smoke test: it reaches rare rules slowly. The tests above compare two
 implementations on the games they reach; they do not prove a rule matches the game where
@@ -232,8 +237,10 @@ neither was checked against recorded games (see the main README, "What is checke
 `TILE_PLANES` from the engine.
 
 **Adding a batch output:** add the computation in `batch/src/outputs.rs` (usually a call to a
-query) and a method on `Batch`. Then add its name to `OUTPUTS` and a method in
-`python/src/lib.rs`, with a test in `batch/tests/` against the query itself.
+query) and a method on `Batch`. Then add its name to `OUTPUTS` (and `CPU_OUTPUTS` if the GPU
+does not compute it) and a method in `python/src/lib.rs`, with a test in `batch/tests/` against
+the query itself. An output the GPU computes also needs its kernel, a field in the GPU batch's
+outputs and an entry in `python/src/device.rs`.
 
 **Finding your way as an assistant.** Start from the call you care about: `reset::reset`,
 `menu::menu`, `step::advance`, `view::write`. Each module's first comment says what it holds.
