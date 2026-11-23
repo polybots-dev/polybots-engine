@@ -1235,7 +1235,7 @@ fn unit_actions_with(
 mod tests {
     use super::*;
 
-    const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+    const CATALOG: &str = include_str!("../rules/rules-124.json");
 
     /// The kept list of what `limited` kinds look for gives the same answer as the scan around
     /// the city it replaces, for every tile's ruling city and every improvement kind, on states

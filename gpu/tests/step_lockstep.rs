@@ -21,7 +21,7 @@ use engine_fast_gpu::step::{coverage, coverage_reset, twin_advance, COMMANDS};
 use engine_fast_gpu::{dump, state as device, tables};
 use std::collections::BTreeMap;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const END_TURN: i32 = 15;
 const RESIGN: i32 = 35;
 const CAPTURE: i32 = 7;

@@ -15,7 +15,7 @@ use engine_fast_batch::{Applied, Batch, Status, SKIP};
 use engine_fast_gpu::batch::GpuBatch;
 use engine_fast_gpu::device::{peek, Buffer, Exports, Outputs};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const RESIGN: i32 = 35;
 
 const REGULAR: [i32; 4] = [7, 7, 2, 4];

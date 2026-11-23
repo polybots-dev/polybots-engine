@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy the game's rule data out of an installed copy of The Battle of Polytopia.
+"""Copy the game's rule data out of an installed copy of The Battle of Polytopia (optional).
 
     python3 -m pip install UnityPy
     python3 tools/extract_rules.py "<game folder>" rules.json

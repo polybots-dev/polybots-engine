@@ -13,8 +13,10 @@
 - **Two backends, one interface.** CPU threads, or an NVIDIA GPU that keeps every game, view and
   legal list in device memory.
 - **Python or Rust.** A Python package (`engine_fast`, numpy arrays) on top of Rust crates.
-- **No game files included.** The engine reads the game's rule data from your own installed copy
-  of the game (see [Rule data](#rule-data)).
+- **The rules come with it.** The rules are in the engine's own format
+  (`rules/rules-124.json`), and the Python package carries them, so no copy of the game is
+  needed: it runs as it is, also for players who have the game only on a phone or tablet. The
+  game's own rule data from a desktop copy works too (see [Rule data](#rule-data)).
 
 ## Contents
 
@@ -35,11 +37,9 @@ Further reading:
 
 ## Quick start
 
-Install the Python package (it needs a Rust toolchain; see [Build and test](#build-and-test))
-and point it at the rule data:
+Install the Python package (it needs a Rust toolchain; see [Build and test](#build-and-test)):
 
     pip install ./python
-    export ENGINE_FAST_RULES=/path/to/rules.json
 
 Play 64 two-player games on an 11 x 11 board with random moves:
 
@@ -84,8 +84,15 @@ queue that CPU threads fill ahead of time.
 
 ## Rule data
 
-The engine needs the game's rule data (rules version 124, game build 2.18.0.16751), which is
-not distributed here. Copy it out of your installed game once:
+Nothing to set up: the rules of version 124 (game build 2.18.0.16751) are in
+`rules/rules-124.json`, in the engine's own format: each unit, tech, improvement, tribe,
+terrain, resource and task by name, with only the values the engine reads. They were written
+from the game's own rule data and give the engine the same tables. The Python package carries
+this file, and the Rust tests and benchmarks read it at build time. `Tables::compile` in
+`src/tables.rs` reads it, and its types document every field.
+
+The game's own rule data works too, if you have a desktop copy of the game. You do not need
+it. Copy it out once:
 
     python3 -m pip install UnityPy==1.25.4
     python3 tools/extract_rules.py "<the game's install folder>" rules.json
@@ -94,9 +101,11 @@ not distributed here. Copy it out of your installed game once:
 - `tools/extract_rules.py` reads the game's `data.unity3d` (in the Mac and Linux installs) and
   does not start or change the game. It refuses rule data of any other version.
 - UnityPy is needed by this tool only, not by the engine or the package.
-- The Python package reads the file `ENGINE_FAST_RULES` names, or `Batch(..., rules=path)`,
-  and refuses a file whose SHA-256 is not that of rules version 124. The Rust tests and
-  benchmarks read it at build time.
+- The Python package reads the file `ENGINE_FAST_RULES` names, or `Batch(..., rules=path)`, in
+  place of the file it carries. It takes a file in the engine's format as it is, and the game's
+  own data only when its SHA-256 is that of rules version 124. Both give the same games.
+- A new game's state names the rule file it was made with and its SHA-256 (`game.rules`). Made
+  from the game's own data, it carries that text instead (`game.catalog_json`).
 
 ## Where things are
 
@@ -110,14 +119,17 @@ not distributed here. Copy it out of your installed game once:
 | `gpu/` | the same batch on an NVIDIA GPU (crate `engine-fast-gpu`, feature `cuda`) |
 | `gpu/kernel/` | the rules in C, built for the host and for CUDA |
 | `python/` | the Python package `engine_fast` (built with maturin) |
-| `tools/extract_rules.py` | copies the rule data out of an installed game |
-| `wheels/` | built Python packages (Linux x86_64 CPU and CUDA, macOS arm64) |
+| `rules/` | the rule data, in the engine's own format |
+| `tools/extract_rules.py` | copies the game's own rule data out of an installed game (optional) |
+| `wheels/` | a built Python package for macOS arm64; elsewhere, `pip install ./python` |
 
 `ARCHITECTURE.md` has a file-by-file map.
 
 ## Build and test
 
-Rust 1.92 or later; Python 3.11 or later with numpy 2.1 or later. With `ENGINE_FAST_RULES` set:
+Rust 1.92 or later; Python 3.11 or later with numpy 2.1 or later. The tests use
+`rules/rules-124.json`; the Python tests also play on the game's own data where
+`ENGINE_FAST_RULES` names it.
 
     cargo test --release                                   # the engine
     cargo test --release --manifest-path batch/Cargo.toml  # the batch against single games
@@ -142,7 +154,8 @@ For the Python package with the GPU backend, run `maturin build --release --feat
 
 The engine was built against a model of the game's rules and checked on recorded online games:
 1 097 recorded games (rules version 123, the same rule data; boards up to 18 x 18) replay
-exactly, decision by decision, special tribes included. On those games the GPU backend gives
+exactly on the game's own rule data, which gives the same tables as `rules/rules-124.json`,
+decision by decision, special tribes included. On those games the GPU backend gives
 the same results, equal to the CPU engine bit for bit. Those checks need the recorded games and the model,
 which are not distributed, so they cannot be rerun from this repository.
 

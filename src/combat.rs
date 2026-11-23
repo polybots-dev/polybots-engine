@@ -6,7 +6,6 @@ use crate::menu::{relation, unit_effects, visible_unit};
 use crate::state::{Game, Tile, Unit, Xy};
 use crate::state::{COOL_DOWN, PEACE};
 use crate::tables::{Tables, UnitData};
-use serde_json::Value;
 
 pub const ATTACK: u64 = 2;
 
@@ -135,11 +134,7 @@ pub(crate) fn defence_bonus(g: &Game, t: &Tables, u: &Unit) -> Result<i32, Strin
                 let Some(tech) = t.techs.get(k as usize) else {
                     continue;
                 };
-                if let Some(v) = tech
-                    .defence_bonus_unlocks
-                    .get(terrain)
-                    .and_then(Value::as_i64)
-                {
+                if let Some(&v) = tech.defence_bonus_unlocks.get(terrain) {
                     if v > 1 {
                         bonus = 15;
                     }

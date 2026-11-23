@@ -21,7 +21,7 @@ use engine_fast_gpu::step::{twin_advance, EfMove};
 use engine_fast_gpu::tables::DeviceTables;
 use std::time::Instant;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../../rules/rules-124.json");
 
 fn positions(t: &Tables, size: i32, want: usize) -> Result<Vec<Game>, String> {
     let mut out = Vec::new();

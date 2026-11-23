@@ -31,7 +31,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../rules/rules-124.json");
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };

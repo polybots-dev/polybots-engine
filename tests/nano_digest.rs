@@ -5,7 +5,7 @@ use engine_fast::reset::{reset, Config, NANO};
 use engine_fast::tables::Tables;
 use sha2::{Digest, Sha256};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../rules/rules-124.json");
 
 /// 144 configurations: 6 seeds on each of the six map types and four rosters of two to four
 /// seats. Re-pinned when Continents and Pangea came in: with their resets put
@@ -50,7 +50,7 @@ fn new_nano_games_are_unchanged() {
     assert!(started >= 90, "{started} games started");
     let digest: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        digest, "b86c064db58d714923e445da07577877761a19b14e3dbf77362ff4688e920ff3",
+        digest, "ae42929a2650632bb70e18e368a7be784b18d369d25b89edd67c9f5c2a1e3025",
         "{started} games started"
     );
 }

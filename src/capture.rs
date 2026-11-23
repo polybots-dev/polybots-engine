@@ -396,7 +396,7 @@ mod tests {
     /// skin language if the catalog has one, else the tribe's, else the default.
     #[test]
     fn a_skin_language_replaces_the_tribes_and_no_language_is_the_default() {
-        let t = Tables::compile(include_str!(env!("ENGINE_FAST_RULES"))).unwrap();
+        let t = Tables::compile(include_str!("../rules/rules-124.json")).unwrap();
         let imperius = t.tribes.id("imperius").unwrap() as i32;
         let own = syllables(&t, imperius, 0).unwrap();
         assert_eq!(

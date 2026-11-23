@@ -5,7 +5,7 @@
 use engine_fast::wire;
 use engine_fast_batch::{Applied, Batch, Loaded, Status, SKIP};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 
 fn state() -> Vec<u8> {
     let hex: String = include_str!("../../tests/data/state.hex")

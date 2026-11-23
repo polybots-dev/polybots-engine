@@ -2,11 +2,14 @@
 
 They check the package's own surface: shapes and types, the rules for moves by index, a
 slot stopping alone, and that results do not depend on the number of workers. The batch
-crate's tests check the batch against the single-game path. They read the rule data from
-ENGINE_FAST_RULES (README.md).
+crate's tests check the batch against the single-game path. They play on the rules the
+package carries, and also on the game's asset where ENGINE_FAST_RULES names one.
 """
 
+import hashlib
+import os
 import struct
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +18,11 @@ import numpy as np
 import engine_fast
 
 RESIGN = 35
+HERE = Path(__file__).resolve().parent
+# the rules the package carries, as a file
+BUNDLED = HERE.parent.parent / "rules" / "rules-124.json"
+# the game's own rule asset, where a copy is at hand
+ASSET = os.environ.get("ENGINE_FAST_RULES")
 
 
 def choose(offsets, moves, status, rng):
@@ -27,9 +35,9 @@ def choose(offsets, moves, status, rng):
     return choice
 
 
-def play(workers, calls, tribes=(7, 7), size=11, games=6):
+def play(workers, calls, tribes=(7, 7), size=11, games=6, rules=None):
     """Every array the batch hands out over `calls` steps of seeded random play."""
-    batch = engine_fast.Batch(games=games, size=size, workers=workers)
+    batch = engine_fast.Batch(games=games, size=size, workers=workers, rules=rules)
     batch.reset(np.arange(games), np.arange(101, 101 + games), list(tribes), action_limit=calls + 1)
     rng = np.random.default_rng(7)
     seen = []
@@ -40,6 +48,56 @@ def play(workers, calls, tribes=(7, 7), size=11, games=6):
         applied = batch.step(choose(offsets, moves, status, rng))
         seen.append((applied,))
     return seen
+
+
+def assert_same(test, one, other):
+    test.assertEqual(len(one), len(other))
+    for a, b in zip(one, other):
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x, y)
+
+
+class RulesTest(unittest.TestCase):
+    """The rules the package carries, a rule file named by path or by ENGINE_FAST_RULES, and
+    the game's own asset play the same games; other files are refused."""
+
+    def setUp(self):
+        self.saved = os.environ.pop("ENGINE_FAST_RULES", None)
+
+    def tearDown(self):
+        os.environ.pop("ENGINE_FAST_RULES", None)
+        if self.saved is not None:
+            os.environ["ENGINE_FAST_RULES"] = self.saved
+
+    def test_named_rule_files_play_as_the_bundled_rules(self):
+        bundled = play(1, 60, tribes=(7, 3, 12))
+        self.assertEqual(engine_fast.Batch(games=1).rules_sha256, engine_fast.RULES_SHA256)
+        named = [BUNDLED] + ([ASSET] if ASSET and Path(ASSET).is_file() else [])
+        for path in named:
+            sha256 = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            assert_same(self, bundled, play(1, 60, tribes=(7, 3, 12), rules=str(path)))
+            self.assertEqual(engine_fast.Batch(games=1, rules=str(path)).rules_sha256, sha256)
+            os.environ["ENGINE_FAST_RULES"] = str(path)
+            assert_same(self, bundled, play(1, 60, tribes=(7, 3, 12)))
+            self.assertEqual(engine_fast.Batch(games=1).rules_sha256, sha256)
+            del os.environ["ENGINE_FAST_RULES"]
+
+    def test_other_rule_files_are_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            asset_like = Path(folder) / "asset.json"
+            asset_like.write_text('{"tribeData": {}}')
+            own = Path(folder) / "own.json"
+            own.write_text(BUNDLED.read_text(encoding="utf-8").replace('"cost"', '"price"', 1),
+                           encoding="utf-8")
+            for path, reason in ((asset_like, "neither"), (own, "price"),
+                                 (Path(folder) / "missing.json", "missing")):
+                with self.assertRaises(ValueError) as e:
+                    engine_fast.Batch(games=1, rules=str(path))
+                self.assertIn(reason, str(e.exception))
+                os.environ["ENGINE_FAST_RULES"] = str(path)
+                with self.assertRaises(ValueError):
+                    engine_fast.Batch(games=1)
+                del os.environ["ENGINE_FAST_RULES"]
 
 
 class BatchTest(unittest.TestCase):
@@ -75,6 +133,7 @@ class BatchTest(unittest.TestCase):
         self.assertTrue((players[:, 0, seat] == scalars[:, engine_fast.SCALAR_FIELDS.index("viewer")]).all())
         self.assertEqual(engine_fast.STATUS[1], "playing")
         self.assertEqual(engine_fast.RULES, 124)
+        self.assertEqual(engine_fast.RULES_SHA256, hashlib.sha256(BUNDLED.read_bytes()).hexdigest())
 
     def test_results_do_not_depend_on_the_number_of_workers(self):
         for tribes, size in (((7, 7), 11), ((7, 7, 7, 7), 14)):

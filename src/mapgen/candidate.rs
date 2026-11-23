@@ -10,7 +10,6 @@ use crate::state::{Game, Improvement, Shoreline, Shorelines, Tile, Xy};
 use crate::step::player_index;
 use crate::tables::Tables;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::sync::Arc;
 
 mod islands;
@@ -399,12 +398,6 @@ fn modify(default: f32, modifier: f32) -> f32 {
     }
 }
 
-fn number(v: &Value, what: &str) -> Result<f32, String> {
-    v.as_f64()
-        .map(|x| x as f32)
-        .ok_or_else(|| format!("{what} contains a non-number"))
-}
-
 /// Assigning a player to a continent: it takes the player's climate and tribe modifiers
 pub(crate) fn set_continent_player(
     g: &mut Game,
@@ -462,7 +455,7 @@ fn apply_tribe(
             6 => &mut c.ice,
             _ => continue,
         };
-        *slot = modify(*slot, number(value, "terrainModifier")?);
+        *slot = modify(*slot, *value as f32);
     }
     for (name, value) in &data.resource_modifier {
         let slot = match t.resources.id(name)? {
@@ -476,7 +469,7 @@ fn apply_tribe(
             9 => &mut c.aquacrop,
             _ => continue,
         };
-        *slot = modify(*slot, number(value, "resourceModifier")?);
+        *slot = modify(*slot, *value as f32);
     }
     Ok(())
 }

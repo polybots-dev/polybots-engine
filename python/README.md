@@ -28,8 +28,10 @@ With a Rust toolchain on the path, from this folder:
 
 pip builds the extension with maturin. Python 3.11 or later and numpy 2.1 or later.
 
-The package needs the game's rule data, read from your installed game: see the main README
-(`tools/extract_rules.py`, then set `ENGINE_FAST_RULES`).
+The package carries the rules (version 124, in the engine's own format), so it runs with
+nothing else installed: no copy of the game is needed, also for players who have the game
+only on a phone or tablet. It can read the game's own rule data from a desktop copy instead:
+see the main README (`tools/extract_rules.py`, then set `ENGINE_FAST_RULES`).
 
 For the GPU backend, build with `maturin build --release --features cuda` on a machine with
 CUDA 12 and its `nvcc`. `EF_CUDA_ARCH` picks the GPU architecture (default `sm_86`). The
@@ -61,7 +63,9 @@ while True:
 - `workers` threads play the games; with one worker they are played on the calling thread.
 - `backend` is `"cpu"` or `"gpu"` (see [The GPU backend](#the-gpu-backend)).
 - `outputs` names the [optional outputs](#optional-outputs) to compute.
-- `rules` is the rule data's path; the default is the `ENGINE_FAST_RULES` variable.
+- `rules` is the path of a rule file, in the engine's format or the game's own data; the
+  default is the file the `ENGINE_FAST_RULES` variable names, else the rules the package carries
+  (`engine_fast.RULES_SHA256` is that file's SHA-256).
 
 **`reset(slots, seeds, tribes, map=2, mode=4, action_limit=1000)`**
 - Starts a new game in each of `slots`, with the matching entry of `seeds`. A slot can be reset

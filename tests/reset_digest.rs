@@ -11,7 +11,7 @@ use engine_fast::reset::{reset, Config};
 use engine_fast::tables::Tables;
 use sha2::{Digest, Sha256};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../rules/rules-124.json");
 
 /// 108 configurations per map type: 6 seeds on each of three board sides and six rosters (two
 /// to four seats; one tribe repeated, which draws replacement colours, and mixed tribes).
@@ -70,7 +70,7 @@ fn new_games_are_unchanged() {
     // most of the pinned outcomes are games, not refusals
     assert!(started >= 300, "{started} games started");
     assert_eq!(
-        digest, "7052aaf688ac2c4379b69da63d440761db76bbad44c8681148f3592c3ccd4b59",
+        digest, "5e66cd2f0618de5111d61aedfd5ac9c44ad5bb56424f7a7a222974a4cea83a09",
         "{started} games started"
     );
 }
@@ -82,7 +82,7 @@ fn new_island_games_are_unchanged() {
     let (digest, started) = digest(&[3, 6]);
     assert!(started >= 200, "{started} games started");
     assert_eq!(
-        digest, "6b3c684c4a323f750a6e68025c9658862aa87faa8dd35754451f9a58c0f206db",
+        digest, "5d4e8d9fbf1ce4e16f07dba51c22a955acb28bf69a4a72c16092938d400c1907",
         "{started} games started"
     );
 }

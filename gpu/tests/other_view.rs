@@ -9,7 +9,7 @@ use engine_fast::tables::Tables;
 use engine_fast_batch::{Applied, Batch, Status, SKIP};
 use engine_fast_gpu::{outputs, state as device, tables};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const RESIGN: i32 = 35;
 const END_TURN: i32 = 15;
 

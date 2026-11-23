@@ -314,7 +314,7 @@ mod tests {
     use crate::reset::{reset, Config};
     use crate::tables::Tables;
 
-    const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+    const CATALOG: &str = include_str!("../rules/rules-124.json");
 
     /// A write that skips the stamp, which only code in this module can make, is caught by the
     /// shadow mode; the same write through `tile_mut` is not.

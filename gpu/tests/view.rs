@@ -17,7 +17,7 @@ use engine_fast::{menu, step};
 use engine_fast_gpu::{state as device, tables, view as gpu_view};
 use std::mem::size_of;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const END_TURN: i32 = 15;
 const RESIGN: i32 = 35;
 const GAMES: [(i32, usize, i32); 8] = [

@@ -309,7 +309,7 @@ impl Drop for Bank {
 mod tests {
     use super::*;
 
-    const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+    const CATALOG: &str = include_str!("../../rules/rules-124.json");
 
     fn rules() -> Arc<Rules> {
         let tables = Tables::compile(CATALOG).unwrap();

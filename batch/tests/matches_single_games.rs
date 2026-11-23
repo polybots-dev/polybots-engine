@@ -13,7 +13,7 @@ use engine_fast::view::View;
 use engine_fast::{menu, step, view};
 use engine_fast_batch::{Applied, Batch, Move, Status, KINDS, SKIP};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const DECISIONS: u32 = 300;
 
 fn config(seed: i32, size: i32, seats: usize) -> Config {

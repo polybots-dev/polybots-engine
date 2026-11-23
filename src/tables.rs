@@ -1,15 +1,16 @@
-//! Rule tables compiled from the game-logic catalog every checkpoint carries (`game.catalog_json`, the
-//! game logic data the original game ran with), so engine-fast uses exactly the game's numbers.
-//! Parsing is strict: a key this module does not know is refused, so a catalog change cannot silently
-//! drop a rule. Entries are stored by their catalog `idx` (the enum id); names map to ids.
+//! Rule tables, compiled from rule data in the engine's own format (`Rules`, the files in
+//! `rules/`) or from the game's own rule asset (which a checkpoint made from it carries as
+//! `game.catalog_json`; `game_rules` reads it). Both give the same tables. Parsing is
+//! strict: a key the engine does not know is refused, so a change to the data cannot silently
+//! drop a rule. Entries are stored by id (the game's enum id); names map to ids.
 
-use serde::Deserialize;
-use serde_json::Value;
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use sha2::Digest;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A catalog ability list. Membership of a name the catalog shipped with is one bit test; any
 /// other name is looked up in the list itself, so a changed catalog stays exact.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Abilities {
     names: Vec<String>,
     mask: u128,
@@ -122,6 +123,18 @@ pub(crate) fn unlocks(mask: u128, name: &str) -> bool {
     ability_bit(name).is_some_and(|bit| mask >> bit & 1 == 1)
 }
 
+impl Abilities {
+    fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+}
+
+impl Serialize for Abilities {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.names.serialize(s)
+    }
+}
+
 impl<'de> Deserialize<'de> for Abilities {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let names = Vec::<String>::deserialize(d)?;
@@ -133,11 +146,14 @@ impl<'de> Deserialize<'de> for Abilities {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+/// A unit kind. The rule types below are the engine's own rule format (`rules/`), field for
+/// field: only what the engine reads, typed. `game_rules` reads the game's asset into them.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnitData {
+    #[serde(rename = "id")]
     pub idx: usize,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
     pub cost: i32,
     pub health: i32,
@@ -147,125 +163,194 @@ pub struct UnitData {
     pub range: i32,
     pub attack: i32,
     pub promotion_limit: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Abilities::is_empty")]
     pub unit_abilities: Abilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub growth_rate: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upgrades_from: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub movement_terrain: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TechData {
+    #[serde(rename = "id")]
     pub idx: usize,
     pub cost: i32,
-    #[serde(default)]
+    /// in the order the research tree is walked
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tech_unlocks: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unit_unlocks: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub improvement_unlocks: Vec<String>,
-    #[serde(default)]
-    pub movement_unlocks: BTreeMap<String, i32>,
-    #[serde(default)]
+    /// the terrains this tech lets units move on
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub movement_unlocks: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Abilities::is_empty")]
     pub ability_unlocks: Abilities,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub task_unlocks: Vec<String>,
-    #[serde(default)]
-    pub defence_bonus_unlocks: BTreeMap<String, Value>,
+    /// a defence bonus by terrain name (a value above 1 gives the bonus)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub defence_bonus_unlocks: BTreeMap<String, i64>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+/// An entry of an improvement's terrain, adjacency or creates list: the names it gives.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Requirement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub improvement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_improvement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
+/// What building (or growing) an improvement gives; an absent amount is 0.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reward {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub population: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub score: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub currency: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImprovementData {
+    #[serde(rename = "id")]
     pub idx: usize,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_level: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_size: Option<i32>,
-    #[serde(default)]
-    pub terrain_requirements: Vec<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_requirements: Vec<Requirement>,
+    #[serde(default, skip_serializing_if = "Abilities::is_empty")]
     pub improvement_abilities: Abilities,
-    #[serde(default)]
-    pub rewards: Vec<Value>,
-    pub should_suggest_unlock: Option<bool>,
-    #[serde(default)]
-    pub adjacency_improvements: Vec<Value>,
-    #[serde(default)]
-    pub adjacency_requirements: Vec<Value>,
-    #[serde(default)]
-    pub growth_rewards: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewards: Vec<Reward>,
+    /// the neighbours that add to this improvement's level: improvement or resource entries
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjacency_improvements: Vec<Requirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjacency_requirements: Vec<Requirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub growth_rewards: Vec<Reward>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<i32>,
-    #[serde(default)]
-    pub routes: Vec<Value>,
-    #[serde(default)]
-    pub creates: Vec<Value>,
+    /// the terrains a route of this improvement crosses
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub creates: Vec<Requirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub growth_rate: Option<i32>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TribeData {
+    #[serde(rename = "id")]
     pub idx: usize,
     pub color: i64,
-    pub style: i32,
     pub climate: i32,
+    /// the syllables city and player names are made of, comma separated
     pub language: String,
     pub bonus: i32,
     pub starting_unit: String,
-    pub category: i32,
-    pub price_tier: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub starting_tech: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Abilities::is_empty")]
     pub tribe_abilities: Abilities,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub starting_resource: Vec<String>,
-    #[serde(default)]
-    pub terrain_modifier: BTreeMap<String, Value>,
-    #[serde(default)]
-    pub skins: Vec<String>,
-    #[serde(default)]
-    pub resource_modifier: BTreeMap<String, Value>,
+    /// the map generator's terrain weights for this tribe's land, by terrain name
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub terrain_modifier: BTreeMap<String, f64>,
+    /// the map generator's resource weights for this tribe's land, by resource name
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resource_modifier: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starting_stars: Option<i32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unit_overrides: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tech_overrides: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub improvement_overrides: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+/// A terrain, resource or task kind.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Indexed {
+    #[serde(rename = "id")]
     pub idx: usize,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_terrain_requirements: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub improvement_unlocks: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Catalog {
-    tribe_data: BTreeMap<String, TribeData>,
-    tech_data: BTreeMap<String, TechData>,
-    unit_data: BTreeMap<String, UnitData>,
-    improvement_data: BTreeMap<String, ImprovementData>,
-    terrain_data: BTreeMap<String, Indexed>,
-    resource_data: BTreeMap<String, Indexed>,
-    task_data: BTreeMap<String, Indexed>,
-    skin_data: BTreeMap<String, Value>,
-    diplomacy_data: BTreeMap<String, Value>,
+fn is_false(x: &bool) -> bool {
+    !x
+}
+
+fn is_zero(x: &i32) -> bool {
+    *x == 0
+}
+
+/// The format name the engine's own rule files carry in their `format` key.
+pub const FORMAT: &str = "engine-fast-rules-1";
+
+/// Rule data in the engine's own format: every section by name, each entry with its id. A rule
+/// file is this object with two more keys: `format` (`FORMAT`) and `name` (which rules).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rules {
+    pub tribes: BTreeMap<String, TribeData>,
+    pub techs: BTreeMap<String, TechData>,
+    pub units: BTreeMap<String, UnitData>,
+    pub improvements: BTreeMap<String, ImprovementData>,
+    pub terrain: BTreeMap<String, Indexed>,
+    pub resources: BTreeMap<String, Indexed>,
+    pub tasks: BTreeMap<String, Indexed>,
+    /// the naming syllables of the skins that have their own
+    pub skin_languages: Vec<SkinLanguage>,
+    /// an embassy's income per level (doubled at peace)
+    pub embassy_income: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkinLanguage {
+    /// the game's skin id
+    pub skin: i64,
+    pub language: String,
 }
 
 /// One catalog section stored by id, with its name lookup.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Section<T> {
     pub by_id: Vec<Option<(String, T)>>,
     pub id_of: BTreeMap<String, usize>,
@@ -340,10 +425,20 @@ fn resolve<T>(
     })
 }
 
+/// Which rule data a `Tables` was compiled from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// the game's asset, which a new game's state carries in full (`catalog_json`)
+    Game,
+    /// a rule file in the engine's format, which a new game's state names (`rules`)
+    Own { name: String, sha256: String },
+}
+
 #[derive(Debug)]
 pub struct Tables {
-    /// the digest of the catalogue text these tables were compiled from (`compiled_from`)
-    source: u64,
+    /// the digest of the text these tables were compiled from (`compiled_from`)
+    text: u64,
+    source: Source,
     pub tribes: Section<TribeData>,
     pub techs: Section<TechData>,
     pub units: Section<UnitData>,
@@ -351,11 +446,12 @@ pub struct Tables {
     pub terrain: Section<Indexed>,
     pub resources: Section<Indexed>,
     pub tasks: Section<Indexed>,
-    pub diplomacy: BTreeMap<String, Value>,
-    /// a skin's naming language by skin id, for the skins the catalog gives one
+    /// an embassy's income per level (doubled at peace)
+    pub embassy_income: Option<i64>,
+    /// a skin's naming language by skin id, for the skins the rules give one
     pub(crate) skin_languages: Vec<(i64, String)>,
-    /// the colours of the playable tribes in the catalog's own order, which the colour of
-    /// a second player of the same tribe is drawn from
+    /// the colours of the playable tribes in id order, which the colour of a second player of
+    /// the same tribe is drawn from
     pub(crate) tribe_colors: Vec<i32>,
     /// per improvement kind, filled on first use (routes.rs)
     pub(crate) routers: std::sync::OnceLock<Vec<Result<Option<crate::routes::Router>, String>>>,
@@ -372,7 +468,7 @@ pub struct Tables {
 
 /// One entry of an improvement's requirement lists with its names resolved once. An unknown
 /// name stays an error for the rule that reads it.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Names {
     pub resource: Option<Result<i32, String>>,
     pub terrain: Option<Result<i32, String>>,
@@ -384,7 +480,7 @@ pub(crate) struct Names {
 }
 
 /// An improvement's terrainRequirements, adjacencyRequirements and creates lists.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct Requirements {
     pub terrain: Vec<Names>,
     pub adjacency: Vec<Names>,
@@ -394,7 +490,7 @@ pub(crate) struct Requirements {
 /// The tech tree with its names resolved, per tech id, for one tribe: its unit, tech and
 /// improvement overrides applied as the section resolve does. Errors stay per entry: a tech
 /// nothing asks about cannot refuse a query.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct TechTree {
     // the tribe's tech tree: breadth-first from tech 0, each queued tech resolved before the
     /// resolved before the first-visit check, at most 200 dequeues
@@ -430,9 +526,48 @@ impl TechTree {
 }
 
 impl Tables {
-    /// Whether these tables were compiled from `catalog_json` (byte for byte).
-    pub fn compiled_from(&self, catalog_json: &str) -> bool {
-        self.source == text_digest(catalog_json)
+    /// Whether these tables were compiled from `text` (byte for byte).
+    pub fn compiled_from(&self, text: &str) -> bool {
+        self.text == text_digest(text)
+    }
+
+    /// Which rule data these tables were compiled from.
+    pub fn source(&self) -> &Source {
+        &self.source
+    }
+}
+
+impl Tables {
+    /// Whether these tables and `o` hold the same rules: every table, the ones filled on first
+    /// use included (this fills them). The text compiled from and its kind (`source`) do not
+    /// count.
+    pub fn same_tables(&self, o: &Tables) -> bool {
+        let filled = |t: &Tables| {
+            for kind in 0..t.improvements.len() {
+                let _ = crate::routes::router(t, kind as i32);
+                t.requirements(kind);
+            }
+            let _ = t.trees();
+            let _ = t.movements(&[]);
+            let _ = t.resource_terrains(0);
+        };
+        filled(self);
+        filled(o);
+        self.tribes == o.tribes
+            && self.techs == o.techs
+            && self.units == o.units
+            && self.improvements == o.improvements
+            && self.terrain == o.terrain
+            && self.resources == o.resources
+            && self.tasks == o.tasks
+            && self.embassy_income == o.embassy_income
+            && self.skin_languages == o.skin_languages
+            && self.tribe_colors == o.tribe_colors
+            && self.routers.get() == o.routers.get()
+            && self.tech_trees.get() == o.tech_trees.get()
+            && self.tech_movements.get() == o.tech_movements.get()
+            && self.requirements.get() == o.requirements.get()
+            && self.resource_terrains.get() == o.resource_terrains.get()
     }
 }
 
@@ -440,57 +575,27 @@ impl Tables {
 pub const MAX_ID_BLOCK: usize = 64;
 
 impl Tables {
-    /// Compiles the catalog JSON text carried in a checkpoint (`game.catalog_json`).
-    pub fn compile(catalog_json: &str) -> Result<Tables, String> {
-        // The game's own data repeats a key in one entry (techData.rituals has "cost" twice, both 2).
-        // Identical repeats are accepted; a repeat with a different value is refused.
-        let v: Strict = serde_json::from_str(catalog_json).map_err(|e| format!("catalog: {e}"))?;
-        let mut tribe_colors = Vec::new();
-        for tribe in v.0["tribeData"]
-            .as_object()
-            .ok_or("catalog tribes")?
-            .values()
-        {
-            let color = tribe["color"].as_i64().ok_or("tribe color")? as i32;
-            // tribes 0 and 1 (none, Nature) are not playable
-            if tribe["idx"].as_i64().ok_or("tribe idx")? >= 2 {
-                tribe_colors.push(color);
-            }
-        }
-        let c: Catalog = serde_json::from_value(v.0).map_err(|e| format!("catalog: {e}"))?;
-        // skin type ids of the skins a catalog can describe (it names them, lowercase)
-        const SKINS: [(&str, i64); 17] = [
-            ("default", 0),
-            ("ranger", 1),
-            ("ninja", 2),
-            ("baerion", 3),
-            ("scholar", 5),
-            ("mercenary", 7),
-            ("sfinx", 8),
-            ("skeleton", 9),
-            ("arty", 10),
-            ("pirate", 11),
-            ("aibo", 12),
-            ("urkaz", 13),
-            ("ikarus", 14),
-            ("darkelf", 15),
-            ("swamp", 17),
-            ("magma", 18),
-            ("cute", 19),
-        ];
-        let mut skin_languages = Vec::new();
-        for (name, skin) in &c.skin_data {
-            let id = SKINS
+    /// Compiles rule data: a rule file in the engine's format (it has a top-level `format` key,
+    /// which the game's asset does not) or the game's asset (a checkpoint's `game.catalog_json`).
+    pub fn compile(text: &str) -> Result<Tables, String> {
+        let head: BTreeMap<String, serde::de::IgnoredAny> =
+            serde_json::from_str(text).map_err(|e| format!("rules: {e}"))?;
+        let (rules, source) = if head.contains_key("format") {
+            let (rules, name) = read_own(text)?;
+            let sha256 = sha2::Sha256::digest(text.as_bytes())
                 .iter()
-                .find(|(n, _)| n == name)
-                .ok_or("catalog skin")?
-                .1;
-            if let Some(language) = skin["language"].as_str().filter(|l| !l.is_empty()) {
-                skin_languages.push((id, language.to_owned()));
-            }
-        }
-        let furthest = c.unit_data.values().map(|u| u.movement).max().unwrap_or(0);
-        if c.unit_data
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            (rules, Source::Own { name, sha256 })
+        } else {
+            (crate::game_rules::read(text)?, Source::Game)
+        };
+        Tables::build(rules, text_digest(text), source)
+    }
+
+    fn build(r: Rules, text: u64, source: Source) -> Result<Tables, String> {
+        let furthest = r.units.values().map(|u| u.movement).max().unwrap_or(0);
+        if r.units
             .values()
             .any(|u| u.range > crate::combat::ATTACK_RANGE as i32)
         {
@@ -506,24 +611,38 @@ impl Tables {
             }
             _ => Ok(()),
         };
-        ids(c.unit_data.values().map(|e| e.idx).collect(), "unit")?;
+        ids(r.units.values().map(|e| e.idx).collect(), "unit")?;
         ids(
-            c.improvement_data.values().map(|e| e.idx).collect(),
+            r.improvements.values().map(|e| e.idx).collect(),
             "improvement",
         )?;
-        ids(c.tech_data.values().map(|e| e.idx).collect(), "tech")?;
+        ids(r.techs.values().map(|e| e.idx).collect(), "tech")?;
+        let tribes = Section::build(r.tribes, |e| e.idx, "tribes")?;
+        // tribes 0 and 1 (none, Nature) are not playable
+        let tribe_colors = tribes
+            .by_id
+            .iter()
+            .flatten()
+            .filter(|(_, d)| d.idx >= 2)
+            .map(|(_, d)| d.color as i32)
+            .collect();
         Ok(Tables {
-            source: text_digest(catalog_json),
-            tribes: Section::build(c.tribe_data, |e| e.idx, "tribes")?,
-            techs: Section::build(c.tech_data, |e| e.idx, "techs")?,
-            units: Section::build(c.unit_data, |e| e.idx, "units")?,
-            improvements: Section::build(c.improvement_data, |e| e.idx, "improvements")?,
-            terrain: Section::build(c.terrain_data, |e| e.idx, "terrain")?,
-            resources: Section::build(c.resource_data, |e| e.idx, "resources")?,
-            tasks: Section::build(c.task_data, |e| e.idx, "tasks")?,
-            diplomacy: c.diplomacy_data,
+            text,
+            source,
+            tribes,
+            techs: Section::build(r.techs, |e| e.idx, "techs")?,
+            units: Section::build(r.units, |e| e.idx, "units")?,
+            improvements: Section::build(r.improvements, |e| e.idx, "improvements")?,
+            terrain: Section::build(r.terrain, |e| e.idx, "terrain")?,
+            resources: Section::build(r.resources, |e| e.idx, "resources")?,
+            tasks: Section::build(r.tasks, |e| e.idx, "tasks")?,
+            embassy_income: r.embassy_income,
             tribe_colors,
-            skin_languages,
+            skin_languages: r
+                .skin_languages
+                .into_iter()
+                .map(|s| (s.skin, s.language))
+                .collect(),
             routers: Default::default(),
             tech_trees: Default::default(),
             tech_movements: Default::default(),
@@ -539,22 +658,24 @@ impl Tables {
 
     pub(crate) fn requirements(&self, kind: usize) -> &Requirements {
         let all = self.requirements.get_or_init(|| {
-            let names = |list: &[Value]| -> Vec<Names> {
+            let names = |list: &[Requirement]| -> Vec<Names> {
                 list.iter()
                     .map(|entry| {
-                        let name = |key: &str| entry.get(key).and_then(Value::as_str);
-                        let id = |key: &str, section: &dyn Fn(&str) -> Result<usize, String>| {
-                            name(key).map(|n| section(n).map(|x| x as i32))
+                        let id = |name: &Option<String>,
+                                  section: &dyn Fn(&str) -> Result<usize, String>| {
+                            name.as_deref().map(|n| section(n).map(|x| x as i32))
                         };
                         Names {
-                            resource: id("resource", &|n| self.resources.id(n)),
-                            terrain: id("terrain", &|n| self.terrain.id(n)),
-                            improvement: id("improvement", &|n| self.improvements.id(n)),
-                            not_improvement: id("notImprovement", &|n| self.improvements.id(n)),
-                            effect: name("effect").map(str::to_owned),
-                            positive: ["resource", "terrain", "improvement"]
-                                .iter()
-                                .any(|k| entry.get(*k).is_some()),
+                            resource: id(&entry.resource, &|n| self.resources.id(n)),
+                            terrain: id(&entry.terrain, &|n| self.terrain.id(n)),
+                            improvement: id(&entry.improvement, &|n| self.improvements.id(n)),
+                            not_improvement: id(&entry.not_improvement, &|n| {
+                                self.improvements.id(n)
+                            }),
+                            effect: entry.effect.clone(),
+                            positive: entry.resource.is_some()
+                                || entry.terrain.is_some()
+                                || entry.improvement.is_some(),
                         }
                     })
                     .collect()
@@ -665,8 +786,9 @@ impl Tables {
                         continue;
                     }
                     for r in &d.terrain_requirements {
-                        let kind = r["resource"]
-                            .as_str()
+                        let kind = r
+                            .resource
+                            .as_deref()
                             .and_then(|n| self.resources.id(n).ok());
                         match kind {
                             Some(k) if k < 32 => kinds |= 1 << k,
@@ -713,13 +835,7 @@ impl Tables {
             (0..self.techs.len())
                 .map(|k| {
                     let mut terrains = 0u32;
-                    for name in self
-                        .techs
-                        .get(k)
-                        .ok_or("unknown tech")?
-                        .movement_unlocks
-                        .keys()
-                    {
+                    for name in &self.techs.get(k).ok_or("unknown tech")?.movement_unlocks {
                         match self.terrain.id(name)? {
                             id if id < 32 => terrains |= 1 << id,
                             _ => return Err("terrain id past the mask".into()),
@@ -771,9 +887,29 @@ impl Tables {
     }
 }
 
+/// A rule file in the engine's format: its rules and name. The format must be `FORMAT`.
+fn read_own(text: &str) -> Result<(Rules, String), String> {
+    let Strict(serde_json::Value::Object(mut v)) =
+        serde_json::from_str(text).map_err(|e| format!("rules: {e}"))?
+    else {
+        return Err("rules: not an object".into());
+    };
+    let mut key = |k: &str| match v.remove(k) {
+        Some(serde_json::Value::String(s)) => Ok(s),
+        _ => Err(format!("rules: no {k} string")),
+    };
+    let (format, name) = (key("format")?, key("name")?);
+    if format != FORMAT {
+        return Err(format!("rules: format {format}, not {FORMAT}"));
+    }
+    let rules =
+        serde_json::from_value(serde_json::Value::Object(v)).map_err(|e| format!("rules: {e}"))?;
+    Ok((rules, name))
+}
+
 /// JSON value parsed with a duplicate-key check: a key repeated with an equal value is kept once,
 /// with a different value it is an error.
-struct Strict(Value);
+pub(crate) struct Strict(pub serde_json::Value);
 
 impl<'de> Deserialize<'de> for Strict {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -785,34 +921,34 @@ impl<'de> Deserialize<'de> for Strict {
                 f.write_str("JSON")
             }
             fn visit_bool<E>(self, b: bool) -> Result<Strict, E> {
-                Ok(Strict(Value::Bool(b)))
+                Ok(Strict(serde_json::Value::Bool(b)))
             }
             fn visit_i64<E>(self, x: i64) -> Result<Strict, E> {
-                Ok(Strict(Value::from(x)))
+                Ok(Strict(serde_json::Value::from(x)))
             }
             fn visit_u64<E>(self, x: u64) -> Result<Strict, E> {
-                Ok(Strict(Value::from(x)))
+                Ok(Strict(serde_json::Value::from(x)))
             }
             fn visit_f64<E: Error>(self, x: f64) -> Result<Strict, E> {
                 serde_json::Number::from_f64(x)
-                    .map(|n| Strict(Value::Number(n)))
+                    .map(|n| Strict(serde_json::Value::Number(n)))
                     .ok_or_else(|| E::custom("non-finite number"))
             }
             fn visit_str<E>(self, x: &str) -> Result<Strict, E> {
-                Ok(Strict(Value::from(x)))
+                Ok(Strict(serde_json::Value::from(x)))
             }
             fn visit_string<E>(self, x: String) -> Result<Strict, E> {
-                Ok(Strict(Value::String(x)))
+                Ok(Strict(serde_json::Value::String(x)))
             }
             fn visit_unit<E>(self) -> Result<Strict, E> {
-                Ok(Strict(Value::Null))
+                Ok(Strict(serde_json::Value::Null))
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Strict, A::Error> {
                 let mut out = Vec::new();
                 while let Some(Strict(x)) = a.next_element()? {
                     out.push(x);
                 }
-                Ok(Strict(Value::Array(out)))
+                Ok(Strict(serde_json::Value::Array(out)))
             }
             fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Strict, A::Error> {
                 let mut out = serde_json::Map::new();
@@ -829,7 +965,7 @@ impl<'de> Deserialize<'de> for Strict {
                         }
                     }
                 }
-                Ok(Strict(Value::Object(out)))
+                Ok(Strict(serde_json::Value::Object(out)))
             }
         }
         d.deserialize_any(V)
@@ -839,6 +975,12 @@ impl<'de> Deserialize<'de> for Strict {
 #[cfg(test)]
 mod tests {
     use super::Strict;
+
+    #[test]
+    fn repeated_keys_must_agree() {
+        assert!(serde_json::from_str::<Strict>(r#"{"a": {"cost": 2, "cost": 2}}"#).is_ok());
+        assert!(serde_json::from_str::<Strict>(r#"{"a": {"cost": 2, "cost": 3}}"#).is_err());
+    }
 
     #[test]
     fn ability_bits_match_the_list() {
@@ -923,9 +1065,9 @@ mod tests {
     /// refused at load; the rule data in use loads.
     #[test]
     fn ids_past_the_action_table_are_refused() {
-        let text = include_str!(env!("ENGINE_FAST_RULES"));
+        let text = include_str!("../rules/rules-124.json");
         assert!(super::Tables::compile(text).is_ok());
-        for section in ["unitData", "improvementData", "techData"] {
+        for section in ["units", "improvements", "techs"] {
             let mut c: serde_json::Value = serde_json::from_str(text).unwrap();
             let first = c[section]
                 .as_object_mut()
@@ -933,7 +1075,7 @@ mod tests {
                 .values_mut()
                 .next()
                 .unwrap();
-            first["idx"] = serde_json::json!(super::MAX_ID_BLOCK);
+            first["id"] = serde_json::json!(super::MAX_ID_BLOCK);
             let e = super::Tables::compile(&c.to_string()).err();
             assert!(
                 e.as_deref()
@@ -941,11 +1083,5 @@ mod tests {
                 "{section}: {e:?}"
             );
         }
-    }
-
-    #[test]
-    fn repeated_keys_must_agree() {
-        assert!(serde_json::from_str::<Strict>(r#"{"a": {"cost": 2, "cost": 2}}"#).is_ok());
-        assert!(serde_json::from_str::<Strict>(r#"{"a": {"cost": 2, "cost": 3}}"#).is_err());
     }
 }

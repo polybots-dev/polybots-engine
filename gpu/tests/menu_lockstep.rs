@@ -17,7 +17,7 @@ use engine_fast_gpu::menu::twin_menu;
 use engine_fast_gpu::{state as device, tables};
 use std::collections::BTreeMap;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const END_TURN: i32 = 15;
 /// size, tribes, seed
 const GAMES: [(i32, &[i32], i32); 10] = [

@@ -10,7 +10,6 @@ use crate::step::{
     player_index, refresh_tech_cache, relation_entry, relation_of, task_notification,
 };
 use crate::tables::Tables;
-use serde_json::Value;
 
 const CITY: i32 = 1;
 const PORT: i32 = 7;
@@ -404,11 +403,7 @@ fn embassy_income(g: &Game, t: &Tables, i: usize, o: usize) -> Result<i32, Strin
     if r.embassy_level < 1 || has_war(g, o, i) {
         return Ok(0);
     }
-    let base = t
-        .diplomacy
-        .get("embassyIncome")
-        .and_then(Value::as_i64)
-        .ok_or("embassy income")?;
+    let base = t.embassy_income.ok_or("embassy income")?;
     let peace = r.state == PEACE;
     Ok((base * if peace { 2 } else { 1 } * i64::from(r.embassy_level)) as i32)
 }

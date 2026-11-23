@@ -21,6 +21,7 @@ pub mod cymanti;
 pub mod economy;
 pub mod elyrion;
 pub mod explore;
+mod game_rules;
 pub mod infiltrate;
 pub mod inline;
 pub mod linked;

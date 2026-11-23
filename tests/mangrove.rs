@@ -5,7 +5,7 @@ use engine_fast::reset::{self, Config};
 use engine_fast::state::Game;
 use engine_fast::tables::Tables;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../rules/rules-124.json");
 
 #[test]
 fn a_board_with_mangrove_is_refused_at_import() {

@@ -14,7 +14,7 @@ use engine_fast::reset::Config;
 use engine_fast_batch::{Applied, Batch, Status, SKIP};
 use std::time::Instant;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../../rules/rules-124.json");
 const END_TURN: i32 = 15;
 const RESIGN: i32 = 35;
 

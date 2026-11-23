@@ -4,8 +4,10 @@ Copyright 2026 nanobot
 Licensed under the Apache License, Version 2.0 (LICENSE).
 
 The Battle of Polytopia is a game by Midjiwan AB. This project is not affiliated with or
-endorsed by Midjiwan. It contains none of the game's code, data or assets: the rule data is
-read from the user's own installed copy of the game (tools/extract_rules.py).
+endorsed by Midjiwan. It contains none of the game's code or assets. rules/rules-124.json
+holds the game's rule values of version 124 (unit statistics, costs, the tech tree and the
+like), written from the game's rule data in this project's own format; those values are
+Midjiwan's game design.
 
 Third-party material in gpu/:
 

@@ -172,7 +172,7 @@ fn build_validation_writes(
         .get(kind as usize)
         .ok_or("unknown improvement")?;
     for r in &d.terrain_requirements {
-        if r["terrain"] == "field"
+        if r.terrain.as_deref() == Some("field")
             && (terrain == FOREST
                 || (terrain == WATER || terrain == OCEAN) && ![3, 17, 52, 14].contains(&kind))
         {

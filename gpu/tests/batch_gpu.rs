@@ -10,7 +10,7 @@ use engine_fast_batch::{Applied, Batch, Status};
 use engine_fast_gpu::batch::GpuBatch;
 use engine_fast_gpu::state as device;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 
 fn compare(cpu: &Batch, gpu: &mut GpuBatch, at: &str) {
     for k in 0..cpu.len() {

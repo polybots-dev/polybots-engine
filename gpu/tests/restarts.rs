@@ -13,7 +13,7 @@ use engine_fast_gpu::batch::GpuBatch;
 use engine_fast_gpu::device::Buffer;
 use engine_fast_gpu::state as device;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 
 fn config(size: i32, seed: i32, seats: usize) -> Config {
     Config {

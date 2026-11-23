@@ -6,8 +6,6 @@ use crate::state::{Game, Unit, Xy};
 use crate::step::{player_index, refresh_tech_cache};
 use crate::tables::Tables;
 
-use serde_json::Value;
-
 const CITY: i32 = 1;
 const DAGGER: i32 = 37;
 const CLOAK: i32 = 38;
@@ -153,7 +151,7 @@ fn rebellion_weight(g: &mut Game, t: &Tables, p: i32, c: Xy) -> Result<f32, Stri
             .ok_or("unknown tech")?
             .defence_bonus_unlocks
             .get(terrain)
-            .and_then(Value::as_i64)
+            .copied()
         {
             if v > 1 {
                 weight += 1.0;

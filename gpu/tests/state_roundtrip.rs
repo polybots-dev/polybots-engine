@@ -19,7 +19,7 @@ use engine_fast_gpu::dump;
 use engine_fast_gpu::state as device;
 use std::mem::{offset_of, size_of};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const END_TURN: i32 = 15;
 const RESIGN: i32 = 35;
 

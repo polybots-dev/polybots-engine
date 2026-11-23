@@ -7,7 +7,7 @@
 //! the result. A catalog the block cannot hold, or one whose derived tables the engine would
 //! report an error for, is refused here rather than carried as a per-game error.
 
-use engine_fast::tables::Tables;
+use engine_fast::tables::{Requirement, Tables};
 
 /// Ability names in the bit order of `kernel/abilities.h`.
 pub const ABILITY_NAMES: [&str; 78] = [
@@ -395,24 +395,22 @@ fn unlocks(
 
 /// tables.rs requirements: one entry's names (EF_NONE where absent, the reason kept where
 /// the catalog lacks the name)
-fn names(t: &Tables, entry: &serde_json::Value, keep: &mut impl FnMut(String) -> i32) -> EfNames {
+fn names(t: &Tables, entry: &Requirement, keep: &mut impl FnMut(String) -> i32) -> EfNames {
     let mut n = EfNames {
         resource: -1,
         terrain: -1,
         improvement: -1,
         not_improvement: -1,
         positive: i32::from(
-            ["resource", "terrain", "improvement"]
-                .iter()
-                .any(|k| entry.get(*k).is_some()),
+            entry.resource.is_some() || entry.terrain.is_some() || entry.improvement.is_some(),
         ),
         ..EfNames::default()
     };
-    let mut id = |key: &str,
+    let mut id = |key: &Option<String>,
                   section: &dyn Fn(&str) -> Result<usize, String>,
                   value: &mut i32,
                   error: &mut i32| {
-        if let Some(name) = entry.get(key).and_then(serde_json::Value::as_str) {
+        if let Some(name) = key.as_deref() {
             match section(name) {
                 Ok(k) => *value = k as i32,
                 Err(reason) => *error = keep(reason),
@@ -420,25 +418,25 @@ fn names(t: &Tables, entry: &serde_json::Value, keep: &mut impl FnMut(String) ->
         }
     };
     id(
-        "resource",
+        &entry.resource,
         &|x| t.resources.id(x),
         &mut n.resource,
         &mut n.resource_error,
     );
     id(
-        "terrain",
+        &entry.terrain,
         &|x| t.terrain.id(x),
         &mut n.terrain,
         &mut n.terrain_error,
     );
     id(
-        "improvement",
+        &entry.improvement,
         &|x| t.improvements.id(x),
         &mut n.improvement,
         &mut n.improvement_error,
     );
     id(
-        "notImprovement",
+        &entry.not_improvement,
         &|x| t.improvements.id(x),
         &mut n.not_improvement,
         &mut n.not_improvement_error,
@@ -551,7 +549,7 @@ fn tree(
                             continue;
                         }
                         for r in &d.terrain_requirements {
-                            match r["resource"].as_str().and_then(|n| t.resources.id(n).ok()) {
+                            match r.resource.as_deref().and_then(|n| t.resources.id(n).ok()) {
                                 Some(k) if k < 32 => kinds |= 1 << k,
                                 Some(_) => return Err("resource id past the mask".into()),
                                 None => {}
@@ -654,11 +652,7 @@ impl DeviceTables {
         for id in 0..t.terrain.len() {
             d.terrain_known[id] = i32::from(t.terrain.name(id).is_ok());
         }
-        match t
-            .diplomacy
-            .get("embassyIncome")
-            .and_then(serde_json::Value::as_i64)
-        {
+        match t.embassy_income {
             Some(v) => {
                 d.has_embassy_income = 1;
                 d.embassy_income =
@@ -679,7 +673,7 @@ impl DeviceTables {
             // tables.rs tech_tree: movements (the terrains its movement unlocks name)
             let movements = || -> Result<u32, String> {
                 let mut terrains = 0u32;
-                for name in tech.movement_unlocks.keys() {
+                for name in &tech.movement_unlocks {
                     match t.terrain.id(name)? {
                         id if id < 32 => terrains |= 1 << id,
                         _ => return Err("terrain id past the mask".into()),
@@ -696,11 +690,7 @@ impl DeviceTables {
                 let Ok(name) = t.terrain.name(id) else {
                     continue;
                 };
-                if let Some(v) = tech
-                    .defence_bonus_unlocks
-                    .get(name)
-                    .and_then(serde_json::Value::as_i64)
-                {
+                if let Some(&v) = tech.defence_bonus_unlocks.get(name) {
                     entry.defence_terrains |= 1 << id;
                     entry.defence_value[id] =
                         i32::try_from(v).unwrap_or(if v > 0 { i32::MAX } else { i32::MIN });
@@ -865,17 +855,14 @@ impl DeviceTables {
             entry.field_requirement = i32::from(
                 m.terrain_requirements
                     .iter()
-                    .any(|r| r["terrain"] == "field"),
+                    .any(|r| r.terrain.as_deref() == Some("field")),
             );
             entry.abilities = mask(|n| m.improvement_abilities.has(n));
             // routes.rs build_router
             let router = || -> Result<u32, String> {
                 let mut terrain = 0u32;
                 for v in &m.routes {
-                    let id = v
-                        .as_str()
-                        .and_then(|n| t.terrain.id(n).ok())
-                        .ok_or("route terrain")?;
+                    let id = t.terrain.id(v).map_err(|_| "route terrain")?;
                     terrain |= 1u32.checked_shl(id as u32).ok_or("route terrain")?;
                 }
                 Ok(terrain)
@@ -886,25 +873,22 @@ impl DeviceTables {
             }
             entry.router_range = m.range.unwrap_or(0);
             entry.router_connects = i32::from(m.improvement_abilities.has("network"));
-            // economy.rs field: a missing or non-integer field counts 0, truncated to 32 bits
-            let field = |v: &serde_json::Value, k: &str| v[k].as_i64().unwrap_or(0) as i32;
             entry.has_cost = i32::from(m.cost.is_some());
             entry.cost = m.cost.unwrap_or(0);
             entry.has_border_size = i32::from(m.border_size.is_some());
             entry.border_size = m.border_size.unwrap_or(0);
             entry.has_routes = i32::from(!m.routes.is_empty());
             for r in &m.rewards {
-                entry.reward_currency = entry.reward_currency.wrapping_add(field(r, "currency"));
-                entry.reward_population =
-                    entry.reward_population.wrapping_add(field(r, "population"));
-                entry.reward_score = entry.reward_score.wrapping_add(field(r, "score").max(0));
+                entry.reward_currency = entry.reward_currency.wrapping_add(r.currency);
+                entry.reward_population = entry.reward_population.wrapping_add(r.population);
+                entry.reward_score = entry.reward_score.wrapping_add(r.score.max(0));
             }
             entry.creates_len = fits(m.creates.len(), MAX_CREATES, "creates entries")?;
             for (slot, e) in entry.creates.iter_mut().zip(&m.creates) {
                 *slot = EfCreates {
                     unit: -1,
                     unit_error: 0,
-                    effect: i32::from(e["effect"].is_string()),
+                    effect: i32::from(e.effect.is_some()),
                     effect_pad: 0,
                     terrain: -1,
                     terrain_error: 0,
@@ -914,7 +898,7 @@ impl DeviceTables {
                     effect_kind_error: 0,
                 };
                 // menu.rs can_build: the effect a creates entry names
-                match e.get("effect").and_then(serde_json::Value::as_str) {
+                match e.effect.as_deref() {
                     None => {}
                     Some("flooded") => slot.effect_kind = 1,
                     Some("algae") => slot.effect_kind = 4,
@@ -923,19 +907,19 @@ impl DeviceTables {
                             keep(format!("creates effect {other} not implemented"))
                     }
                 }
-                if let Some(n) = e["unit"].as_str() {
+                if let Some(n) = &e.unit {
                     match t.units.id(n) {
                         Ok(k) => slot.unit = k as i32,
                         Err(reason) => slot.unit_error = keep(reason),
                     }
                 }
-                if let Some(n) = e["terrain"].as_str() {
+                if let Some(n) = &e.terrain {
                     match t.terrain.id(n) {
                         Ok(k) => slot.terrain = k as i32,
                         Err(reason) => slot.terrain_error = keep(reason),
                     }
                 }
-                if let Some(n) = e["resource"].as_str() {
+                if let Some(n) = &e.resource {
                     match t.resources.id(n) {
                         Ok(k) => slot.resource = k as i32,
                         Err(reason) => slot.resource_error = keep(reason),
@@ -944,8 +928,8 @@ impl DeviceTables {
             }
             entry.growth_len = fits(m.growth_rewards.len(), MAX_GROWTH, "growth rewards")?;
             for (k, r) in m.growth_rewards.iter().enumerate() {
-                entry.growth_population[k] = field(r, "population");
-                entry.growth_score_each[k] = field(r, "score");
+                entry.growth_population[k] = r.population;
+                entry.growth_score_each[k] = r.score;
             }
             entry.requirement_len = fits(
                 m.terrain_requirements.len(),
@@ -978,11 +962,10 @@ impl DeviceTables {
                 "fungi" => NAMED_FUNGI,
                 _ => 0,
             };
-            // economy.rs field(r, "score"): a missing or non-integer score counts 0
             entry.growth_score = m
                 .growth_rewards
                 .iter()
-                .map(|r| r["score"].as_i64().unwrap_or(0) as i32)
+                .map(|r| r.score)
                 .fold(0i32, i32::wrapping_add);
             entry.adjacency_len = fits(
                 m.adjacency_improvements.len(),
@@ -996,13 +979,13 @@ impl DeviceTables {
                     resource: -1,
                     resource_error: 0,
                 };
-                if let Some(n) = e["improvement"].as_str() {
+                if let Some(n) = &e.improvement {
                     match t.improvements.id(n) {
                         Ok(k) => slot.improvement = k as i32,
                         Err(reason) => slot.improvement_error = keep(reason),
                     }
                 }
-                if let Some(n) = e["resources"].as_str() {
+                if let Some(n) = &e.resource {
                     match t.resources.id(n) {
                         Ok(k) => slot.resource = k as i32,
                         Err(reason) => slot.resource_error = keep(reason),

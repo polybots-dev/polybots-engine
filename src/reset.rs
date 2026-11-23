@@ -7,7 +7,7 @@ use crate::mapgen::{select, MapGeneratorSettings};
 use crate::random::SystemRandom;
 use crate::state::Game;
 use crate::step::{add_score, player_index, task_notification};
-use crate::tables::Tables;
+use crate::tables::{Source, Tables};
 use serde_json::{json, Value};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,7 +131,7 @@ fn colors_and_names(g: &mut Game, t: &Tables, gameplay_seed: i32) -> Result<(), 
     if !duplicates.is_empty() {
         let mut random = SystemRandom::new(gameplay_seed);
         let mut available = Vec::new();
-        // the catalog's own tribe order, playable tribes only
+        // the playable tribes in id order
         for &color in &t.tribe_colors {
             if !picked.contains(&color) {
                 available.push(color);
@@ -283,11 +283,13 @@ pub(crate) fn start_match(g: &mut Game, t: &Tables, out: &mut Vec<Action>) -> Re
 }
 
 /// A new game: the state the game environment has after `reset` with candidate details
-/// on (the first viewer memory included). `catalog_json` is the catalog text the game carries
-/// and `t` its compiled tables.
-pub fn reset(config: &Config, catalog_json: &str, t: &Tables) -> Result<Game, String> {
-    if !t.compiled_from(catalog_json) {
-        return Err("the tables were not compiled from the catalogue text given".into());
+/// on (the first viewer memory included). `rules` is the rule text `t` was compiled from. The
+/// state carries it in full when it is the game's asset (`catalog_json`), as the game does; rules
+/// in the engine's own format are named instead, with their SHA-256 (`rules`), which keeps
+/// states small and needs no copy of the file in each.
+pub fn reset(config: &Config, rules: &str, t: &Tables) -> Result<Game, String> {
+    if !t.compiled_from(rules) {
+        return Err("the tables were not compiled from the rule text given".into());
     }
     if ![123, 124].contains(&config.rules) {
         return Err("reset for rules other than 123 and 124 not implemented".into());
@@ -364,12 +366,19 @@ pub fn reset(config: &Config, catalog_json: &str, t: &Tables) -> Result<Game, St
             },
             "commands": [],
             "actions": {"entries": []},
-            "catalog_json": catalog_json,
         },
         "decisions": 0,
         "sightings": {},
         "history": {},
     });
+    let mut checkpoint = checkpoint;
+    // the last key of `game`, where the game writes its catalog
+    match t.source() {
+        Source::Game => checkpoint["game"]["catalog_json"] = json!(rules),
+        Source::Own { name, sha256 } => {
+            checkpoint["game"]["rules"] = json!({"name": name, "sha256": sha256})
+        }
+    }
     let cleared = (0..width)
         .flat_map(|y| (0..width).map(move |x| crate::state::Xy { x, y }))
         .map(crate::mapgen::candidate::cleared_tile)

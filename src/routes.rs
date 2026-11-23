@@ -30,7 +30,7 @@ fn improvement_has(t: &Tables, kind: i32, ability: &str) -> bool {
 }
 
 /// The improvement's route terrain, range and Network ability
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Router {
     /// the route terrains, as a mask by terrain id
     pub(crate) terrain: u32,
@@ -58,10 +58,7 @@ fn build_router(t: &Tables, kind: i32) -> Result<Option<Router>, String> {
     };
     let mut terrain = 0u32;
     for v in &d.routes {
-        let id = v
-            .as_str()
-            .and_then(|n| t.terrain.id(n).ok())
-            .ok_or("route terrain")?;
+        let id = t.terrain.id(v).map_err(|_| "route terrain")?;
         terrain |= 1u32.checked_shl(id as u32).ok_or("route terrain")?;
     }
     Ok(Some(Router {
@@ -1465,7 +1462,7 @@ mod tests {
     /// tile changing key after that must not read the empty region.
     #[test]
     fn a_player_without_a_capital_survives_a_key_change() {
-        const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+        const CATALOG: &str = include_str!("../rules/rules-124.json");
         let t = Tables::compile(CATALOG).unwrap();
         let config = crate::reset::Config {
             rules: 124,

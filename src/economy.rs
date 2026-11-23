@@ -7,7 +7,6 @@ use crate::inline::Seats;
 use crate::state::{Game, Xy};
 use crate::step::{player_index, task_notification};
 use crate::tables::{ImprovementData, Tables};
-use serde_json::Value;
 
 const CITY: i32 = 1;
 const ROAD: i32 = 3;
@@ -23,10 +22,6 @@ fn data(t: &Tables, kind: i32) -> Option<&ImprovementData> {
 
 fn has(d: &ImprovementData, ability: &str) -> bool {
     d.improvement_abilities.has(ability)
-}
-
-fn field(v: &Value, k: &str) -> i32 {
-    v[k].as_i64().unwrap_or(0) as i32
 }
 
 /// The score of the improvement on tile `i`
@@ -49,7 +44,7 @@ pub(crate) fn improvement_score(t: &Tables, g: &Game, i: usize) -> i32 {
         }
     }
     if has(d, "patina") {
-        let per: i32 = d.growth_rewards.iter().map(|r| field(r, "score")).sum();
+        let per: i32 = d.growth_rewards.iter().map(|r| r.score).sum();
         score = score.wrapping_add(per.wrapping_mul(m.level));
     }
     score
@@ -82,7 +77,7 @@ fn adjacency_bonus(g: &Game, t: &Tables, i: usize, d: &ImprovementData) -> Resul
                         total += if per_tile { 1 } else { level.max(1) };
                     }
                 };
-                if let Some(n) = e["improvement"].as_str() {
+                if let Some(n) = &e.improvement {
                     let id = t.improvements.id(n)? as i32;
                     if let Some(m) = &o.improvement {
                         if m.kind != 0 && m.kind == id {
@@ -90,7 +85,7 @@ fn adjacency_bonus(g: &Game, t: &Tables, i: usize, d: &ImprovementData) -> Resul
                         }
                     }
                 }
-                if let Some(n) = e["resources"].as_str() {
+                if let Some(n) = &e.resource {
                     let id = t.resources.id(n)? as i32;
                     if o.improvement.is_none() && o.resource.is_some_and(|r| r != 0 && r == id) {
                         add(id, 1);
@@ -226,13 +221,13 @@ pub fn build(
     let (consumed, temporary) = (has(d, "consumed"), has(d, "discrete"));
     let mut changes_route = false;
     for e in &d.creates {
-        changes_route |= e["terrain"].is_string() || e["effect"].is_string();
+        changes_route |= e.terrain.is_some() || e.effect.is_some();
     }
     let (mut currency, mut population, mut score) = (0, 0, 0);
     for r in &d.rewards {
-        currency += field(r, "currency");
-        population += field(r, "population");
-        score += field(r, "score").max(0);
+        currency += r.currency;
+        population += r.population;
+        score += r.score.max(0);
     }
     // the children pushed from here are buffered: moved behind the surrounding-area ones at the end
     let start = out.len();
@@ -334,11 +329,11 @@ pub fn build(
         crate::aquarion::drain_tile(g, c)?;
     }
     for e in &d.creates {
-        if let Some(n) = e["terrain"].as_str() {
+        if let Some(n) = &e.terrain {
             g.tile_mut(i).terrain = t.terrain.id(n)? as i32;
             g.tile_mut(i).resource = None;
         }
-        if let Some(n) = e["resource"].as_str() {
+        if let Some(n) = &e.resource {
             // created unless the player already sees a resource there
             if crate::infiltrate::visible_resource(g, t, player, c)?.is_none() {
                 out.push(Action::Economy(Economy::CreateResource {
@@ -350,7 +345,7 @@ pub fn build(
             }
         }
         // EnchantAnimal: a free unit of the named kind (not resolved through the tribe)
-        if let Some(n) = e["unit"].as_str() {
+        if let Some(n) = &e.unit {
             out.push(Action::Economy(Economy::Train {
                 player,
                 kind: t.units.id(n)? as i32,
@@ -361,8 +356,8 @@ pub fn build(
             }));
         }
         // the Algae build's effect; Foam joins Algae on the Cute game skin
-        if let Some(n) = e["effect"].as_str() {
-            let effect = match n {
+        if let Some(n) = &e.effect {
+            let effect = match n.as_str() {
                 "algae" => 4,
                 "flooded" => 1,
                 other => return Err(format!("creates effect {other} not implemented")),
@@ -401,10 +396,10 @@ pub fn build(
 
 /// Population at a level: rewards plus growth population per level when maxLevel > 0
 pub(crate) fn population_at_level(d: &ImprovementData, level: i32) -> i32 {
-    let mut v: i32 = d.rewards.iter().map(|r| field(r, "population")).sum();
+    let mut v: i32 = d.rewards.iter().map(|r| r.population).sum();
     if d.max_level.unwrap_or(0) > 0 {
         for r in &d.growth_rewards {
-            v = v.wrapping_add(field(r, "population").wrapping_mul(level));
+            v = v.wrapping_add(r.population.wrapping_mul(level));
         }
     }
     v
@@ -438,7 +433,7 @@ pub fn destroy(
             }));
         }
         for r in &d.terrain_requirements {
-            if let Some(n) = r["resource"].as_str() {
+            if let Some(n) = &r.resource {
                 g.tile_mut(i).resource = Some(t.resources.id(n)? as i32);
             }
         }
@@ -541,7 +536,7 @@ pub fn economy_action(
             let ruling = g.tiles[i].ruling_city;
             if let Some(d) = t.improvements.get(kind as usize) {
                 for r in &d.growth_rewards {
-                    let population = field(r, "population");
+                    let population = r.population;
                     if population > 0 && (down || ruling != NULL) {
                         for _ in 0..population {
                             out.push(if down {
@@ -560,8 +555,8 @@ pub fn economy_action(
                             });
                         }
                     }
-                    if !down && field(r, "score") > 0 {
-                        out.push(score_child(player, field(r, "score"), c));
+                    if !down && r.score > 0 {
+                        out.push(score_child(player, r.score, c));
                     }
                 }
             }

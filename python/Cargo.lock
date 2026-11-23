@@ -141,6 +141,7 @@ dependencies = [
  "engine-fast-gpu",
  "numpy",
  "pyo3",
+ "serde_json",
  "sha2",
 ]
 

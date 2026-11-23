@@ -12,7 +12,7 @@ use engine_fast::tables::Tables;
 use engine_fast_gpu::step::twin_city_name;
 use engine_fast_gpu::{state as device, tables};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 
 #[test]
 fn the_ports_city_names_are_the_engines() {

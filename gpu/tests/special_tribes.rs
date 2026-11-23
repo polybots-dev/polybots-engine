@@ -6,7 +6,7 @@ use engine_fast_gpu::check;
 use engine_fast_gpu::state as device;
 use engine_fast_gpu::tables::DeviceTables;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 
 fn game(t: &Tables, tribes: Vec<i32>) -> engine_fast::state::Game {
     let config = Config {

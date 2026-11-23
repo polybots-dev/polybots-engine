@@ -9,7 +9,7 @@ use engine_fast::step;
 use engine_fast::tables::Tables;
 use engine_fast_frame::{Action, Xy};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../rules/rules-124.json");
 const MOVE: i32 = 6;
 const FROZEN: i64 = 0;
 
@@ -87,8 +87,8 @@ fn a_move_by_a_unit_that_cannot_move_is_refused() {
     }
 }
 
-/// `reset` refuses tables compiled from another catalogue text than the one it is given (the
-/// game carries the text; its rules come from the tables).
+/// `reset` refuses tables compiled from another rule text than the one it is given (the game
+/// carries or names the text; its rules come from the tables).
 #[test]
 fn reset_refuses_tables_from_another_catalogue() {
     let other = format!("{CATALOG} ");
@@ -103,6 +103,6 @@ fn reset_refuses_tables_from_another_catalogue() {
         action_limit: 4096,
     };
     let err = reset(&config, CATALOG, &t).err().unwrap();
-    assert!(err.contains("catalogue"), "{err}");
+    assert!(err.contains("rule text"), "{err}");
     assert!(reset(&config, &other, &t).is_ok());
 }

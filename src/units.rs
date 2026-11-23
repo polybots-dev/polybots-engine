@@ -583,7 +583,7 @@ pub(crate) fn train_on_occupied(
 mod tests {
     use super::*;
 
-    const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+    const CATALOG: &str = include_str!("../rules/rules-124.json");
 
     /// A free Train onto player 2's starting unit, which has nowhere to go (every neighbour
     /// is taken): the occupant is killed. Rules 124 then queues a Houdini action (an

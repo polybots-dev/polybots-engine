@@ -27,7 +27,7 @@ This file goes from the top down:
 ## 1. The pieces
 
 ```
- rule data (rules.json, from your installed game)
+ rule data (rules/rules-124.json, or the game's own from an install)
         |
         v
  Tables ----------------------------------------------+
@@ -43,9 +43,11 @@ This file goes from the top down:
          +------ Python package (python/) ----------+
 ```
 
-- **Rule data and `Tables`.** The game's rule data is a JSON document of units, technologies,
-  terrain and improvements. `tables.rs` compiles it once into lookup tables by id. Nothing in
-  the engine hard-codes a unit's statistics or a technology's cost.
+- **Rule data and `Tables`.** The rule data is a JSON document of units, technologies,
+  terrain and improvements: the engine's own file (`rules/`, its types in `tables.rs`) or the
+  game's own data (`game_rules.rs` reads it into the same types). `tables.rs` compiles either
+  once into lookup tables by id; both give equal tables. Nothing in the engine hard-codes a
+  unit's statistics or a technology's cost.
 - **`Game`** (`state.rs`) is the whole state of one game: board, units, players, the queued
   actions, the random seeds. It can be exported to and imported from a JSON checkpoint.
 - **The rules** are ordinary functions over `&mut Game` and `&Tables`, one module per area.
@@ -60,7 +62,8 @@ This file goes from the top down:
 | --- | --- |
 | `lib.rs` | the crate root: the module list |
 | `state.rs`, `board.rs`, `inline.rs` | the game state; tiles, units and effect lists; small in-place lists, so copying a game copies no heap data |
-| `tables.rs` | the rule data compiled into tables |
+| `tables.rs` | the rule types (the engine's own rule format) and the tables compiled from them |
+| `game_rules.rs` | the game's own rule data read into the rule types |
 | `reset.rs`, `mapgen.rs`, `mapgen/` | a new game: players, then the map generator (candidates, placement, the fairness choice) |
 | `menu.rs`, `menu_cache.rs` | the legal moves; the list kept between decisions, redoing only what changed |
 | `movement.rs`, `combat.rs` | the move search and the attack search behind the legal moves |
@@ -93,7 +96,8 @@ This file goes from the top down:
 | `gpu/src/check.rs` | plays a recorded game (a list of commands) through the host build, comparing every decision with the Rust engine |
 | `gpu/src/bin/` | GPU benchmarks: the step, the view, the batch and the whole device loop |
 | `python/src/lib.rs` | the Python module `engine_fast` |
-| `tools/extract_rules.py` | copies the rule data out of an installed game |
+| `rules/rules-124.json` | the rules of version 124 in the engine's own format |
+| `tools/extract_rules.py` | copies the game's own rule data out of an installed game (optional) |
 
 ## 3. A game's life
 

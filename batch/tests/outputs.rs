@@ -12,7 +12,7 @@ use engine_fast::state::{Game, Unit};
 use engine_fast::tables::Tables;
 use engine_fast_batch::{Applied, Batch, Status, SKIP};
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../rules/rules-124.json");
 const DECISIONS: u32 = 400;
 const RESIGN: i32 = 35;
 

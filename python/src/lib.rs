@@ -14,9 +14,11 @@ use pyo3::types::PyBytes;
 use sha2::Digest;
 use std::borrow::Cow;
 
-/// The SHA-256 of the rule data of rules version 124 (game build 2.18.0.16751), the one
-/// version this package implements.
-const RULES_SHA256: &str = "c6806c77963b5377bdbc2570bf0a3abece622e4e148883754dd190b02f890086";
+/// The rules the package carries: rules version 124 in the engine's own format.
+const RULES: &str = include_str!("../../rules/rules-124.json");
+/// The SHA-256 of the game's own rule asset of rules version 124 (game build 2.18.0.16751),
+/// which `rules=` or `ENGINE_FAST_RULES` may name instead.
+const ASSET_SHA256: &str = "c6806c77963b5377bdbc2570bf0a3abece622e4e148883754dd190b02f890086";
 
 /// The optional outputs a batch can be made with.
 const OUTPUTS: [&str; 5] = ["previews", "defence", "income", "max_health", "other_view"];
@@ -33,26 +35,35 @@ fn refuse(e: String) -> PyErr {
     PyValueError::new_err(e)
 }
 
-/// The game's rule data, from `path` or else the file `ENGINE_FAST_RULES` names
-/// (tools/extract_rules.py copies it out of an installed game).
-fn rules(path: Option<String>) -> PyResult<String> {
-    let path = path
-        .or_else(|| std::env::var("ENGINE_FAST_RULES").ok())
-        .ok_or_else(|| {
-            refuse(
-            "no rule data: pass rules=PATH or set ENGINE_FAST_RULES (see tools/extract_rules.py)"
-                .into(),
-        )
-        })?;
+/// The rule text: the file at `path`, else the file `ENGINE_FAST_RULES` names, else the rules
+/// the package carries. A file in the engine's own format is taken as it is; the game's asset
+/// only when it is rules version 124's.
+fn rules(path: Option<String>) -> PyResult<Cow<'static, str>> {
+    let named = || {
+        std::env::var("ENGINE_FAST_RULES")
+            .ok()
+            .filter(|p| !p.is_empty())
+    };
+    let Some(path) = path.or_else(named) else {
+        return Ok(Cow::Borrowed(RULES));
+    };
     let text = std::fs::read_to_string(&path).map_err(|e| refuse(format!("{path}: {e}")))?;
-    let digest = sha2::Sha256::digest(text.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    if hex != RULES_SHA256 {
+    let own = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text)
+        .map_err(|e| refuse(format!("{path}: {e}")))?
+        .contains_key("format");
+    if !own && sha256(&text) != ASSET_SHA256 {
         return Err(refuse(format!(
-            "{path} is not the rule data of rules version 124"
+            "{path} is neither rules in the engine's format nor the game's rules version 124"
         )));
     }
-    Ok(text)
+    Ok(Cow::Owned(text))
+}
+
+fn sha256(text: &str) -> String {
+    sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A row of a fresh array, which is contiguous.
@@ -138,14 +149,17 @@ impl Inner {
 
 /// `games` slots of one board size (side 11 to 30, or 8 for nano), played on `workers` threads (default:
 /// one, the caller's own). `backend` "cpu" (the default) or, in a package built with the `cuda`
-/// feature, "gpu": the same interface with the games kept on GPU 0. `rules` is the path of the
-/// game's rule data (default: the `ENGINE_FAST_RULES` environment variable).
+/// feature, "gpu": the same interface with the games kept on GPU 0. `rules` is the path of a rule
+/// file, in the engine's format or the game's asset (default: the `ENGINE_FAST_RULES` environment
+/// variable, else the rules the package carries).
 #[pyclass]
 struct Batch {
     inner: Inner,
     size: i32,
     /// the optional outputs asked for when the batch was made, from `OUTPUTS`
     outputs: Vec<&'static str>,
+    /// of the rule text the batch was made with
+    rules_sha256: String,
 }
 
 impl Batch {
@@ -263,13 +277,13 @@ impl Batch {
                 return Err(refuse(format!("output {o:?}: the cpu backend only")));
             }
         }
-        let catalog = self::rules(rules)?;
+        let rules = self::rules(rules)?;
         let inner = match backend {
-            "cpu" => Inner::Cpu(batch::Batch::new(&catalog, games, workers).map_err(refuse)?),
+            "cpu" => Inner::Cpu(batch::Batch::new(&rules, games, workers).map_err(refuse)?),
             #[cfg(feature = "cuda")]
             "gpu" => Inner::Gpu(Box::new(
                 engine_fast_gpu::batch::GpuBatch::with_outputs(
-                    &catalog,
+                    &rules,
                     games,
                     workers,
                     size as usize,
@@ -289,6 +303,7 @@ impl Batch {
             inner,
             size,
             outputs: wanted,
+            rules_sha256: sha256(&rules),
         })
     }
 
@@ -415,6 +430,12 @@ impl Batch {
     #[getter]
     fn size(&self) -> i32 {
         self.size
+    }
+
+    /// The SHA-256 of the rule text the batch plays on, however it was named.
+    #[getter]
+    fn rules_sha256(&self) -> &str {
+        &self.rules_sha256
     }
 
     /// Start a new game in each of `slots` (each named once) with the matching entry of
@@ -797,6 +818,8 @@ fn python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(table_decode, m)?)?;
     m.add("TABLE_SCHEMA", batch::table::SCHEMA)?;
     m.add("RULES", 124)?;
+    // what a caller that pins rule data checks the carried rules against
+    m.add("RULES_SHA256", sha256(RULES))?;
     m.add("TILE_PLANES", TILE_PLANES.to_vec())?;
     m.add("MOVE_FIELDS", batch::MOVE_FIELDS.to_vec())?;
     m.add("SCALAR_FIELDS", SCALAR_FIELDS.to_vec())?;

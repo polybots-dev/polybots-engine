@@ -47,7 +47,7 @@ use engine_fast_gpu::batch::GpuBatch;
 use engine_fast_gpu::device::{Buffer, Outputs};
 use std::time::Instant;
 
-const CATALOG: &str = include_str!(env!("ENGINE_FAST_RULES"));
+const CATALOG: &str = include_str!("../../../rules/rules-124.json");
 const RESET_EVERY: usize = 16;
 /// Limits and weights (per mille) whose steady state matches the decision ages of the trained
 /// nano policy. Capped games of every age have age density proportional to P(cap > age),
