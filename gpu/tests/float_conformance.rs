@@ -164,6 +164,7 @@ fn rust(op: Op, [a, b, c, d]: [u32; 4]) -> u64 {
         // infiltrate.rs rebellion_weight and the negated sort key
         // combat.rs shown
         Op::DamageShown => ((ia as f32 * 0.1_f32).round_ties_even() as i32) as u32 as u64,
+        Op::TenthsUp => ((ia as f32 * 0.1_f32).ceil() as i32) as u32 as u64,
         Op::Rebellion => {
             let mut weight = random::hash_range_f32(a, 0.0, f32::from_bits(0x3dcccccd));
             if ib & 1 != 0 {

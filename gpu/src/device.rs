@@ -5,6 +5,7 @@ use crate::state::{self, Block, EfGame};
 use crate::step::EfMove;
 use crate::tables::{DeviceTables, EfTables, KernelResult};
 use crate::view::{EfView, Views};
+use engine_fast_batch::outputs::{Plane, OUTPUTS};
 use std::os::raw::c_void;
 
 extern "C" {
@@ -84,8 +85,14 @@ pub struct Exports {
     pub tech: u64,
     /// int16 x 4 per legal row (`max_rows` per slot), or 0 when the batch was made without
     pub previews: u64,
-    /// int16 per tile (`cells` per slot), or 0 when the batch was made without
-    pub defence: u64,
+    /// per `Plane` (in `Plane::ALL` order), int16 per tile (`cells` per slot); 0 without
+    pub plane_outputs: [u64; Plane::ALL.len()],
+    /// int32 per slot; 0 without
+    pub income: u64,
+    /// int32 per tile (`cells` per slot); 0 without
+    pub city_score: u64,
+    /// int32 x `PROGRESSION_LEN` per slot; 0 without
+    pub progression: u64,
     /// the other seat's view (`Outputs::other_view`), laid out as `tiles`, `scalars`,
     /// `players` and `tech` (its planes at `other_tiles + g * view_stride`); 0 without
     pub other_tiles: u64,
@@ -100,23 +107,66 @@ pub struct Exports {
     pub techs: i32,
 }
 
-/// The optional outputs a batch computes: each is
-/// allocated and computed only when asked for.
+/// The optional outputs a batch computes: each is allocated and computed only when asked for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Outputs {
     /// the attack preview of each legal row
     pub previews: bool,
-    /// the defence-bonus plane of the units the mover sees
-    pub defence: bool,
     /// the view of the next seat after the mover (the privileged critic's input)
     pub other_view: bool,
+    /// the income the mover is shown
+    pub income: bool,
+    /// the score of each city the mover sees
+    pub city_score: bool,
+    /// the mover's view's progression row
+    pub progression: bool,
+    /// per `Plane`, in `Plane::ALL` order
+    pub planes: [bool; Plane::ALL.len()],
 }
 
 impl Outputs {
+    /// The outputs of these names (`OUTPUTS`); refuses an unknown one.
+    pub fn named<S: AsRef<str>>(names: &[S]) -> Result<Outputs, String> {
+        let mut o = Outputs::default();
+        for name in names {
+            match name.as_ref() {
+                "previews" => o.previews = true,
+                "other_view" => o.other_view = true,
+                "income" => o.income = true,
+                "city_score" => o.city_score = true,
+                "progression" => o.progression = true,
+                n => match Plane::named(n) {
+                    Some(p) => o.planes[p as usize] = true,
+                    None => return Err(format!("unknown output {n:?}")),
+                },
+            }
+        }
+        Ok(o)
+    }
+
+    /// Every optional output.
+    pub fn all() -> Outputs {
+        Outputs::named(&OUTPUTS).expect("every output is known")
+    }
+
+    pub fn plane(self, p: Plane) -> bool {
+        self.planes[p as usize]
+    }
+
+    /// `kernel/device.cu` EF_WANT_*
     fn flags(self) -> i32 {
+        let planes = self
+            .planes
+            .iter()
+            .enumerate()
+            .map(|(k, &on)| i32::from(on) << (8 + k))
+            .fold(0, |a, b| a | b);
         i32::from(self.previews)
-            | (i32::from(self.defence) << 1)
-            | (i32::from(self.other_view) << 2)
+            | (i32::from(self.other_view) << 1)
+            | (i32::from(self.income) << 2)
+            | (i32::from(self.city_score) << 3)
+            | (i32::from(self.progression) << 4)
+            | planes
     }
 }
 

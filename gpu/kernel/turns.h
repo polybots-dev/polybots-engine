@@ -290,7 +290,7 @@ EF_FN int ef_has_war(const EfGame *g, int i, int o) {
 }
 
 /* turns.rs embassy_income */
-EF_FN EfResult ef_embassy_income(EfGame *g, const EfTables *t, int i, int o, int32_t *out) {
+EF_FN EfResult ef_embassy_income(const EfGame *g, const EfTables *t, int i, int o, int32_t *out) {
     EfRelation r = ef_relation_read(g, i, g->players[o].id);
     int32_t level = r.embassy_level;
     *out = 0;
@@ -301,14 +301,16 @@ EF_FN EfResult ef_embassy_income(EfGame *g, const EfTables *t, int i, int o, int
     return ef_ok();
 }
 
-/* turns.rs work */
-EF_BIG EfResult ef_work(EfGame *g, const EfTables *t, EfXy c, int32_t level, int32_t *out) {
+/* turns.rs work, with `unit` (a node, or EF_NONE) taken as the unit
+ * on the tile: its own for the rules, the one the viewer sees for an output (queries.rs
+ * as_shown) */
+EF_BIG EfResult ef_work_with(const EfGame *g, const EfTables *t, EfXy c, int32_t level, int32_t unit, int32_t *out) {
     int32_t i = ef_tile_index(g, c);
     if (i == EF_NONE) return ef_err(EF_ERR_WORK_TILE, 0);
     *out = 0;
     const EfTile *tile = &ef_ctiles(g)[i];
     if (!tile->has_improvement_n) return ef_ok();
-    int32_t owner = tile->owner_n, unit = tile->unit_n;
+    int32_t owner = tile->owner_n;
     int32_t kind = tile->improvement.kind_n, production = tile->improvement.production_n, xp = tile->improvement.xp_n;
     int robbed = ef_contains_i8(tile->improvement.effects_n, tile->improvement.effects_len_n, EF_ROBBED);
     if (kind == 0) return ef_ok();
@@ -350,14 +352,25 @@ EF_BIG EfResult ef_work(EfGame *g, const EfTables *t, EfXy c, int32_t level, int
     return ef_ok();
 }
 
-/* turns.rs player_work: income from a tile for p, own or an embassy's capital */
-EF_FN EfResult ef_player_work(EfGame *g, const EfTables *t, EfXy c, int32_t p, int32_t level, int32_t *out) {
+/* the unit on tile c, EF_NONE off the board or where there is none */
+EF_FN int32_t ef_unit_at(const EfGame *g, EfXy c) {
+    int32_t i = ef_tile_index(g, c);
+    return i == EF_NONE ? EF_NONE : ef_ctiles(g)[i].unit_n;
+}
+
+EF_FN EfResult ef_work(const EfGame *g, const EfTables *t, EfXy c, int32_t level, int32_t *out) {
+    return ef_work_with(g, t, c, level, ef_unit_at(g, c), out);
+}
+
+/* turns.rs player_work: income from a tile for p, own or an embassy's capital, with `unit` as
+ * the unit on the tile (ef_work_with) */
+EF_FN EfResult ef_player_work_with(const EfGame *g, const EfTables *t, EfXy c, int32_t p, int32_t level, int32_t unit, int32_t *out) {
     int32_t i = ef_tile_index(g, c);
     if (i == EF_NONE) return ef_err(EF_ERR_PLAYER_WORK_TILE, 0);
     int pi;
     EF_TRY(ef_player(g, p, &pi));
-    int32_t owner = ef_ctiles(g)[i].owner_n, capital_of = ef_ctiles(g)[i].capital_of_n, unit = ef_ctiles(g)[i].unit_n;
-    if (owner == p) return ef_work(g, t, c, level, out);
+    int32_t owner = ef_ctiles(g)[i].owner_n, capital_of = ef_ctiles(g)[i].capital_of_n;
+    if (owner == p) return ef_work_with(g, t, c, level, unit, out);
     *out = 0;
     if (owner != 0 && capital_of == owner) {
         int opponent = 0;
@@ -372,6 +385,10 @@ EF_FN EfResult ef_player_work(EfGame *g, const EfTables *t, EfXy c, int32_t p, i
         }
     }
     return ef_ok();
+}
+
+EF_FN EfResult ef_player_work(const EfGame *g, const EfTables *t, EfXy c, int32_t p, int32_t level, int32_t *out) {
+    return ef_player_work_with(g, t, c, p, level, ef_unit_at(g, c), out);
 }
 
 EF_FN int ef_knows(const EfGame *g, int i, int32_t other) {

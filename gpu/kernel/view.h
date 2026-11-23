@@ -145,15 +145,16 @@ EF_BIG EfResult ef_view_write(const EfGame *g, const EfTables *t, int32_t viewer
             const EfImprovement *m = &x->improvement;
             EF_PLANE(EF_P_IMPROVEMENT) = ef_i16(m->kind_n);
             EF_PLANE(EF_P_IMPROVEMENT_LEVEL) = m->kind_n == EF_CITY ? ef_i16(m->level_n) : 0;
+            /* the game draws walls, parks and super units on every city the viewer sees */
             if (m->kind_n == EF_CITY) {
                 EF_PLANE(EF_P_CITY_PARKS) = (int16_t)m->rewards_n[EF_PARK_REWARD];
                 EF_PLANE(EF_P_CITY_SUPER_UNITS) = (int16_t)m->rewards_n[EF_SUPER_UNIT_REWARD];
+                EF_PLANE(EF_P_CITY_WALL) = (int16_t)(m->rewards_n[EF_CITY_WALL_REWARD] != 0);
             }
             if (m->kind_n == EF_CITY && x->owner_n == viewer) {
                 EF_PLANE(EF_P_CITY_POPULATION) = ef_i16(m->population_n);
                 EF_PLANE(EF_P_CITY_PROGRESS) = ef_i16(m->xp_n);
                 EF_PLANE(EF_P_CITY_CONNECTED) = ef_i16(m->connected_to_capital_of_player_n);
-                EF_PLANE(EF_P_CITY_WALL) = (int16_t)(m->rewards_n[EF_CITY_WALL_REWARD] != 0);
             }
         } else {
             EF_PLANE(EF_P_IMPROVEMENT) = 0;

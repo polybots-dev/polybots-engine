@@ -22,6 +22,7 @@ use engine_fast::reset::{self, Config};
 use engine_fast::state::Game;
 use engine_fast::tables::Tables;
 use engine_fast::view::View;
+use engine_fast_batch::outputs::{Plane, PROGRESSION_LEN};
 use engine_fast_batch::{Applied, Status, SKIP};
 use std::sync::Arc;
 
@@ -96,8 +97,9 @@ impl GpuBatch {
         GpuBatch::with_outputs(catalog_json, games, workers, max_side, Outputs::default())
     }
 
-    /// As `new`, computing the optional `outputs` too (`exports().previews`, `.defence`,
-    /// `.other_tiles` and the rest of the other seat's view).
+    /// As `new`, computing the optional `outputs` too (`exports().previews`, `.plane_outputs`,
+    /// `.income`, `.city_score`, `.progression`, `.other_tiles` and the rest of the other
+    /// seat's view).
     pub fn with_outputs(
         catalog_json: &str,
         games: usize,
@@ -502,23 +504,70 @@ impl GpuBatch {
         Ok(out)
     }
 
-    /// The defence plane of `slot` (copied from the device; made with `Outputs::defence`), as
-    /// the CPU batch's `defence`.
-    pub fn defence(&mut self, slot: usize) -> Result<Option<Vec<i16>>, String> {
+    /// `len` entries of `slot` from the exported array at `base` (`per_slot` entries a slot),
+    /// copied from the device; None when the slot is not playing. Refused when the batch was
+    /// made without `what`.
+    fn read_slot<T: Copy + Default>(
+        &mut self,
+        base: u64,
+        per_slot: usize,
+        len: usize,
+        slot: usize,
+        what: &str,
+    ) -> Result<Option<Vec<T>>, String> {
         self.sync()?;
-        let x = self.device.exports();
-        if x.defence == 0 {
-            return Err("the batch was made without the defence plane".into());
+        if base == 0 {
+            return Err(format!("the batch was made without {what}"));
         }
         let s = &self.slots[slot];
         if s.config.is_none() || s.status != Status::Playing {
             return Ok(None);
         }
-        // the slot's plane starts at its `cells` and has one entry per tile of its own board
-        let mut out = vec![0i16; s.tiles];
-        self.device
-            .read(x.defence + slot as u64 * x.cells as u64 * 2, &mut out)?;
+        let mut out = vec![T::default(); len];
+        let at = (slot * per_slot * std::mem::size_of::<T>()) as u64;
+        self.device.read(base + at, &mut out)?;
         Ok(Some(out))
+    }
+
+    /// Plane `p` of `slot` (made with it in `Outputs::planes`), as the CPU batch's `plane`.
+    pub fn plane(&mut self, slot: usize, p: Plane) -> Result<Option<Vec<i16>>, String> {
+        let x = self.device.exports();
+        // a slot's plane starts at its `cells` and has one entry per tile of its own board
+        let tiles = self.slots[slot].tiles;
+        self.read_slot(
+            x.plane_outputs[p as usize],
+            x.cells as usize,
+            tiles,
+            slot,
+            p.name(),
+        )
+    }
+
+    /// The income of `slot` (made with `Outputs::income`), as the CPU batch's `income`.
+    pub fn income(&mut self, slot: usize) -> Result<Option<i32>, String> {
+        let x = self.device.exports();
+        Ok(self
+            .read_slot::<i32>(x.income, 1, 1, slot, "income")?
+            .map(|v| v[0]))
+    }
+
+    /// The city scores of `slot` (made with `Outputs::city_score`), as the CPU batch's.
+    pub fn city_score(&mut self, slot: usize) -> Result<Option<Vec<i32>>, String> {
+        let x = self.device.exports();
+        let tiles = self.slots[slot].tiles;
+        self.read_slot(x.city_score, x.cells as usize, tiles, slot, "city_score")
+    }
+
+    /// The progression row of `slot` (made with `Outputs::progression`), as the CPU batch's.
+    pub fn progression(&mut self, slot: usize) -> Result<Option<Vec<i32>>, String> {
+        let x = self.device.exports();
+        self.read_slot(
+            x.progression,
+            PROGRESSION_LEN,
+            PROGRESSION_LEN,
+            slot,
+            "progression",
+        )
     }
 
     /// The benchmark's on-device random policy into `actions`.

@@ -27,7 +27,8 @@
 5. [Build and test](#build-and-test)
 6. [Scope](#scope)
 7. [What is checked](#what-is-checked)
-8. [Disclaimer](#disclaimer) and [Licence](#licence)
+8. [Changes](#changes)
+9. [Disclaimer](#disclaimer) and [Licence](#licence)
 
 Further reading:
 - [`python/README.md`](python/README.md): the Python interface, call by call.
@@ -41,24 +42,24 @@ Install a built Python package (Python 3.11 or later). From the repository's rel
 
 Windows x86_64:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-win_amd64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-win_amd64.whl
 
 Linux x86_64:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-manylinux_2_28_x86_64.whl
 
 Linux arm64:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-manylinux_2_28_aarch64.whl
 
 macOS, Intel:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-macosx_11_0_x86_64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-macosx_11_0_x86_64.whl
 
 From a clone of the repository, in its top folder:
 
-    pip install wheels/macos/engine_fast-0.1.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
-    pip install wheels/cuda/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
+    pip install wheels/macos/engine_fast-0.2.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
+    pip install wheels/cuda/engine_fast-0.2.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
 
 - The release's wheels (with their SHA-256 in its `SHA256SUMS`) are built and tested by
   `.github/workflows/wheels.yml` on GitHub's machines. Each was installed on a clean machine and
@@ -212,6 +213,17 @@ The tests in this repository are the engine's own: digests of new games, move ad
 allocation counts, loading stored states, the batch against single games, the optional
 outputs and the action table, the GPU rules against the Rust engine, and the Python
 package. `ARCHITECTURE.md` lists what each one shows.
+
+## Changes
+
+- **0.2.0:** new optional outputs, on the CPU and GPU backends alike: `movement`,
+  `attack_modifier`, `city_work`, `city_units`, `city_siege`, `city_score`, `border_edges` and
+  `progression` (units lost, start tile, revealed resources, monuments, tasks, lighthouses,
+  embassies); `income` and `max_health` now on the GPU backend too
+  ([python/README.md](python/README.md#optional-outputs)). The view's `city_wall` plane now
+  shows walls on every city the player has explored, rivals' included, as the game draws them
+  (0.1.0 showed only the player's own), so a model trained on 0.1.0 sees new values there.
+- **0.1.0:** the first release.
 
 ## Disclaimer
 

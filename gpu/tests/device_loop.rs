@@ -10,7 +10,7 @@
 
 use engine_fast::reset::Config;
 use engine_fast::view::View;
-use engine_fast_batch::outputs::view_rows;
+use engine_fast_batch::outputs::{view_rows, Plane, OUTPUTS, PROGRESSION_LEN};
 use engine_fast_batch::{Applied, Batch, Status, SKIP};
 use engine_fast_gpu::batch::GpuBatch;
 use engine_fast_gpu::device::{peek, Buffer, Exports, Outputs};
@@ -200,11 +200,43 @@ fn compare(cpu: &Batch, x: &Exports, first: usize, at: &str) {
                 "{at}, slot {k}: a stale preview"
             );
         }
-        if x.defence != 0 {
-            let mut dp = vec![0i16; cells];
-            peek(x.defence + ((first + k) * cells * 2) as u64, &mut dp).unwrap();
-            let want = cpu.defence(k).unwrap().unwrap_or_else(|| vec![-1; cells]);
-            assert_eq!(dp, want, "{at}, slot {k}: defence");
+        let slot = (first + k) as u64;
+        for p in Plane::ALL {
+            if x.plane_outputs[p as usize] == 0 {
+                continue;
+            }
+            let mut got = vec![0i16; cells];
+            peek(
+                x.plane_outputs[p as usize] + slot * cells as u64 * 2,
+                &mut got,
+            )
+            .unwrap();
+            let want = cpu.plane(k, p).unwrap().unwrap_or_else(|| vec![-1; cells]);
+            assert_eq!(got, want, "{at}, slot {k}: {p:?}");
+        }
+        if x.income != 0 {
+            let mut got = [0i32];
+            peek(x.income + slot * 4, &mut got).unwrap();
+            assert_eq!(
+                got[0],
+                cpu.income(k).unwrap().unwrap_or(-1),
+                "{at}, slot {k}: income"
+            );
+        }
+        if x.city_score != 0 {
+            let mut got = vec![0i32; cells];
+            peek(x.city_score + slot * cells as u64 * 4, &mut got).unwrap();
+            let want = cpu.city_score(k).unwrap_or_else(|| vec![-1; cells]);
+            assert_eq!(got, want, "{at}, slot {k}: city_score");
+        }
+        if x.progression != 0 {
+            let mut got = vec![0i32; PROGRESSION_LEN];
+            peek(x.progression + slot * PROGRESSION_LEN as u64 * 4, &mut got).unwrap();
+            let want = cpu
+                .progression(k)
+                .unwrap()
+                .unwrap_or_else(|| vec![-1; PROGRESSION_LEN]);
+            assert_eq!(got, want, "{at}, slot {k}: progression");
         }
     }
 }
@@ -270,9 +302,16 @@ fn lockstep_of(
     let x = gpu.exports().unwrap();
     assert_eq!(x.cells, size * size);
     assert_eq!(
-        (x.previews != 0, x.defence != 0, x.other_tiles != 0),
-        (outputs.previews, outputs.defence, outputs.other_view)
+        (x.previews != 0, x.other_tiles != 0, x.income != 0),
+        (outputs.previews, outputs.other_view, outputs.income)
     );
+    assert_eq!(
+        (x.city_score != 0, x.progression != 0),
+        (outputs.city_score, outputs.progression)
+    );
+    for p in Plane::ALL {
+        assert_eq!(x.plane_outputs[p as usize] != 0, outputs.plane(p), "{p:?}");
+    }
     compare(&cpu, &x, first, &format!("size {size}, after the reset"));
     let mut actions = Buffer::new(4 * total as u64).unwrap();
     let mut device_moves = vec![SKIP; total];
@@ -382,72 +421,110 @@ fn a_big_batch_equals_the_cpu_batch() {
     );
 }
 
-/// The optional outputs: with them asked for, the attack previews, the defence plane and the other seat's
-/// view, read in place, equal the CPU batch's on boards 8, 11, 16 and 20.
+/// The optional outputs: with every one asked for, each, read
+/// in place, equals the CPU batch's on boards 8, 11, 16 and 20.
 #[test]
 fn the_device_outputs_equal_the_cpu_batch() {
-    let all = Outputs {
-        previews: true,
-        defence: true,
-        other_view: true,
-    };
+    let all = Outputs::all();
     lockstep(8, 24, 200, all);
     lockstep(11, 24, 160, all);
     lockstep(16, 16, 160, all);
     lockstep(20, 12, 120, all);
 }
 
-/// Asking for the other seat's view changes no other exported array, and its memory is apart
-/// from every other array: two batches of the same games and actions, one with it and one
-/// without, export the same bytes at every step.
+/// The optional arrays of `x` present, by name, as bytes: slots `0..slots`.
+fn optional_arrays(x: &Exports, slots: usize) -> Vec<(String, Vec<u8>)> {
+    let (g, cells) = (slots, x.cells as usize);
+    let mut out = Vec::new();
+    let mut take = |name: &str, at: u64, bytes: usize| {
+        if at != 0 {
+            let mut b = vec![0u8; bytes];
+            peek(at, &mut b).unwrap();
+            out.push((name.to_owned(), b));
+        }
+    };
+    take("previews", x.previews, g * x.max_rows as usize * 8);
+    for p in Plane::ALL {
+        take(p.name(), x.plane_outputs[p as usize], g * cells * 2);
+    }
+    take("income", x.income, g * 4);
+    take("city_score", x.city_score, g * cells * 4);
+    take("progression", x.progression, g * PROGRESSION_LEN * 4);
+    take("other_scalars", x.other_scalars, g * 12);
+    take("other_players", x.other_players, g * 128);
+    take("other_tech", x.other_tech, g * x.techs as usize * 2);
+    if x.other_tiles != 0 {
+        let v = read_view(
+            x,
+            [
+                x.other_tiles,
+                x.other_scalars,
+                x.other_players,
+                x.other_tech,
+            ],
+            0,
+            g,
+        );
+        let planes: Vec<u8> = v
+            .tiles
+            .iter()
+            .flatten()
+            .flat_map(|t| t.to_le_bytes())
+            .collect();
+        out.push(("other_tiles".to_owned(), planes));
+    }
+    out
+}
+
+/// Asking for an optional output changes no other exported array, and its memory is apart from every
+/// other array. Two batches of the same games and actions export the same bytes at every step,
+/// the view, legal list and every optional array both have: one with every output and one with
+/// none, and for each output one with every output and one with all but it. Named for the
+/// other seat's view, the first output it covered.
 #[test]
 fn the_other_view_changes_no_other_array() {
-    for size in [8, 11] {
-        let slots = 24;
-        let made = |other_view| {
-            let o = Outputs {
-                previews: true,
-                defence: true,
-                other_view,
-            };
-            GpuBatch::with_outputs(CATALOG, slots, 4, size as usize, o).unwrap()
-        };
-        let (mut with, mut without) = (made(true), made(false));
-        let starts = configs(slots, size, 5100 + size);
+    let mut cases = vec![("none", Outputs::all(), Outputs::default())];
+    for name in OUTPUTS {
+        let rest: Vec<&str> = OUTPUTS.iter().copied().filter(|n| *n != name).collect();
+        cases.push((name, Outputs::all(), Outputs::named(&rest).unwrap()));
+    }
+    for (k, (name, a, b)) in cases.into_iter().enumerate() {
+        // sides 8 and 11 in turn, 60 calls each
+        let size = [8, 11][k % 2];
+        let slots = 16;
+        let made = |o| GpuBatch::with_outputs(CATALOG, slots, 4, size as usize, o).unwrap();
+        let (mut with, mut without) = (made(a), made(b));
+        let starts = configs(slots, size, 5100 + size + k as i32);
         with.reset(&starts).unwrap();
         without.reset(&starts).unwrap();
         let (xw, xo) = (with.exports().unwrap(), without.exports().unwrap());
-        assert!(xw.other_tiles != 0 && xo.other_tiles == 0);
         // the other view's planes lie outside the mover's views (one block per slot)
         let views = xw.tiles..xw.tiles + slots as u64 * xw.view_stride;
         let other = xw.other_tiles..xw.other_tiles + slots as u64 * xw.view_stride;
         assert!(other.end <= views.start || views.end <= other.start);
-        let extras = |x: &Exports| {
-            let mut pv = vec![[0i16; 4]; slots * x.max_rows as usize];
-            let mut dp = vec![0i16; slots * x.cells as usize];
-            peek(x.previews, &mut pv).unwrap();
-            peek(x.defence, &mut dp).unwrap();
-            (pv, dp)
-        };
         let mut actions = Buffer::new(4 * slots as u64).unwrap();
-        let mut rng = 0x5EED_u64 ^ size as u64;
-        for call in 0..150 {
-            let a = read(&xw, 0, slots);
+        let mut rng = 0x5EED_u64 ^ size as u64 ^ ((k as u64) << 8);
+        for call in 0..60 {
+            let r = read(&xw, 0, slots);
             assert!(
-                a == read(&xo, 0, slots),
-                "size {size}, call {call}: the exports differ"
+                r == read(&xo, 0, slots),
+                "without {name}, size {size}, call {call}: the exports differ"
             );
-            assert!(
-                extras(&xw) == extras(&xo),
-                "size {size}, call {call}: the outputs differ"
-            );
+            let every = optional_arrays(&xw, slots);
+            for (array, bytes) in optional_arrays(&xo, slots) {
+                let (_, w) = every.iter().find(|(n, _)| *n == array).unwrap();
+                assert!(
+                    *w == bytes,
+                    "without {name}, size {size}, call {call}: {array} differs"
+                );
+            }
             let moves: Vec<i32> = (0..slots)
                 .map(|k| {
                     rng = rng
                         .wrapping_mul(6364136223846793005)
                         .wrapping_add(1442695040888963407);
-                    let n = a.counts[k];
-                    if a.status[k] != Status::Playing as i32 || n == 0 {
+                    let n = r.counts[k];
+                    if r.status[k] != Status::Playing as i32 || n == 0 {
                         SKIP
                     } else {
                         ((rng >> 33) % n as u64) as i32

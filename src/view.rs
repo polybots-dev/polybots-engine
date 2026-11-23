@@ -378,15 +378,16 @@ fn write_tile(
         Some(m) if t.improvements.get(m.kind as usize).is_some() => {
             improvement[i] = m.kind as i16;
             level[i] = if m.kind == CITY { m.level as i16 } else { 0 };
+            // the game draws walls, parks and super units on every city the viewer sees
             if m.kind == CITY {
                 city_parks[i] = m.rewards.count(PARK) as i16;
                 city_super_units[i] = m.rewards.count(SUPER_UNIT) as i16;
+                city_wall[i] = i16::from(m.rewards.contains(&CITY_WALL));
             }
             if m.kind == CITY && x.owner == viewer {
                 city_population[i] = m.population as i16;
                 city_progress[i] = m.xp as i16;
                 city_connected[i] = m.connected_to_capital_of_player as i16;
-                city_wall[i] = i16::from(m.rewards.contains(&CITY_WALL));
             }
         }
         _ => {

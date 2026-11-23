@@ -349,16 +349,22 @@ EF_BIG EfResult ef_mover_context(const EfGame *g, const EfTables *t, int32_t own
     return ef_ok();
 }
 
+/* a unit's movement with its effects: the move search's range and the unit panel's figure
+ * (movement.rs profile_with, queries.rs panel) */
+EF_FN int32_t ef_unit_movement(const EfEffectList *fx, const EfUnitData *d) {
+    int32_t r = d->movement + ef_has_effect(fx, EF_BOOSTED);
+    if (ef_has_effect(fx, EF_SWIFT) || ef_has_effect(fx, EF_BUBBLE)) r += 1;
+    if (ef_has_effect(fx, EF_POISONED) && r > 1) r -= 1;
+    return r;
+}
+
 /* movement.rs profile_with: the unit's range and search profile (the unit profile, which
  * does not depend on the range; *range = 0 when it cannot move) */
 EF_BIG EfResult ef_profile_with(const EfGame *g, const EfTables *t, const EfUnit *unit, EfMover *mover, EfProfile *s, int32_t *range) {
     const EfEffectList *fx = ef_effect_list(g, unit->effects_n);
     const EfUnitData *d = ef_unit_data(t, unit->kind_n);
     if (!d) return ef_err(EF_ERR_UNKNOWN_UNIT_KIND, 0);
-    int32_t r = d->movement + ef_has_effect(fx, EF_BOOSTED);
-    if (ef_has_effect(fx, EF_SWIFT) || ef_has_effect(fx, EF_BUBBLE)) r += 1;
-    if (ef_has_effect(fx, EF_POISONED) && r > 1) r -= 1;
-    *range = r;
+    *range = ef_unit_movement(fx, d);
     if (d->movement_terrain_error) return ef_err(EF_ERR_TABLE, d->movement_terrain_error - 1);
     uint32_t allowed;
     if (!d->has_movement_terrain) allowed = mover->movements;

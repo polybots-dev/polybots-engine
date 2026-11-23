@@ -4,7 +4,7 @@
 
 use ::engine_fast::reset::Config;
 use ::engine_fast::view::{View, TILE_PLANES};
-use batch::outputs::{PLAYER_FIELDS, SCALAR_FIELDS, VIEW_SEATS};
+use batch::outputs::{Plane, OUTPUTS, PLAYER_FIELDS, PROGRESSION_LEN, SCALAR_FIELDS, VIEW_SEATS};
 use engine_fast_batch as batch;
 use numpy::ndarray::{Array1, Array2, Array3, Axis};
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayLike1};
@@ -19,11 +19,6 @@ const RULES: &str = include_str!("../../rules/rules-124.json");
 /// The SHA-256 of the game's own rule asset of rules version 124 (game build 2.18.0.16751),
 /// which `rules=` or `ENGINE_FAST_RULES` may name instead.
 const ASSET_SHA256: &str = "c6806c77963b5377bdbc2570bf0a3abece622e4e148883754dd190b02f890086";
-
-/// The optional outputs a batch can be made with.
-const OUTPUTS: [&str; 5] = ["previews", "defence", "income", "max_health", "other_view"];
-/// The outputs only the cpu backend computes.
-const CPU_OUTPUTS: [&str; 2] = ["income", "max_health"];
 
 #[cfg(feature = "cuda")]
 mod device;
@@ -145,6 +140,22 @@ impl Inner {
             Inner::Gpu(b) => Ok(b.other_view(slot)?.map(Cow::Borrowed)),
         }
     }
+    fn plane(&mut self, slot: usize, p: Plane) -> Result<Option<Vec<i16>>, String> {
+        each!(self, b => b.plane(slot, p))
+    }
+    fn income(&mut self, slot: usize) -> Result<Option<i32>, String> {
+        each!(self, b => b.income(slot))
+    }
+    fn city_score(&mut self, slot: usize) -> Result<Option<Vec<i32>>, String> {
+        match self {
+            Inner::Cpu(b) => Ok(b.city_score(slot)),
+            #[cfg(feature = "cuda")]
+            Inner::Gpu(b) => b.city_score(slot),
+        }
+    }
+    fn progression(&mut self, slot: usize) -> Result<Option<Vec<i32>>, String> {
+        each!(self, b => b.progression(slot))
+    }
 }
 
 /// `games` slots of one board size (side 11 to 30, or 8 for nano), played on `workers` threads (default:
@@ -229,24 +240,39 @@ impl Batch {
         ))
     }
 
-    /// One plane per slot as int16 `[games, size * size]`, -1 for a slot without one.
-    fn planes<'py>(
+    /// One row of `width` per slot, `[games, width]`, -1 for a slot without one.
+    fn rows<'py, T: numpy::Element + Copy + From<i8>>(
         &self,
         py: Python<'py>,
-        planes: Vec<Option<Vec<i16>>>,
-    ) -> PyResult<Bound<'py, PyArray2<i16>>> {
-        let cells = (self.size as usize).pow(2);
-        let mut out = Array2::from_elem((planes.len(), cells), -1i16);
-        for (slot, plane) in planes.into_iter().enumerate() {
-            let Some(p) = plane else { continue };
-            if p.len() != cells {
+        width: usize,
+        rows: Vec<Option<Vec<T>>>,
+    ) -> PyResult<Bound<'py, PyArray2<T>>> {
+        let mut out = Array2::from_elem((rows.len(), width), T::from(-1i8));
+        for (slot, row) in rows.into_iter().enumerate() {
+            let Some(r) = row else { continue };
+            if r.len() != width {
                 return Err(refuse(format!(
-                    "slot {slot}: a plane larger than the batch's"
+                    "slot {slot}: a row larger than the batch's"
                 )));
             }
-            out.row_mut(slot).assign(&Array1::from_vec(p));
+            out.row_mut(slot).assign(&Array1::from_vec(r));
         }
         Ok(out.into_pyarray(py))
+    }
+
+    /// Plane `p` of every slot as int16 `[games, size * size]`, -1 in slots not playing.
+    fn plane_rows<'py>(
+        &mut self,
+        py: Python<'py>,
+        p: Plane,
+    ) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.asked(p.name())?;
+        self.inner.sync().map_err(refuse)?;
+        let planes = (0..self.inner.len())
+            .map(|slot| self.inner.plane(slot, p))
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(refuse)?;
+        self.rows(py, (self.size as usize).pow(2), planes)
     }
 }
 
@@ -272,11 +298,6 @@ impl Batch {
             .into_iter()
             .filter(|n| outputs.iter().any(|o| o == n))
             .collect();
-        if backend == "gpu" {
-            if let Some(o) = wanted.iter().find(|o| CPU_OUTPUTS.contains(o)) {
-                return Err(refuse(format!("output {o:?}: the cpu backend only")));
-            }
-        }
         let rules = self::rules(rules)?;
         let inner = match backend {
             "cpu" => Inner::Cpu(batch::Batch::new(&rules, games, workers).map_err(refuse)?),
@@ -287,11 +308,7 @@ impl Batch {
                     games,
                     workers,
                     size as usize,
-                    engine_fast_gpu::device::Outputs {
-                        previews: wanted.contains(&"previews"),
-                        defence: wanted.contains(&"defence"),
-                        other_view: wanted.contains(&"other_view"),
-                    },
+                    engine_fast_gpu::device::Outputs::named(&wanted).map_err(refuse)?,
                 )
                 .map_err(refuse)?,
             )),
@@ -383,43 +400,97 @@ impl Batch {
     /// `[games, size * size]`, -1 elsewhere and in slots not playing. Can show hidden state.
     /// Needs `outputs=("defence",)`.
     fn defence<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
-        self.asked("defence")?;
-        self.inner.sync().map_err(refuse)?;
-        let planes = (0..self.inner.len())
-            .map(|slot| match &mut self.inner {
-                Inner::Cpu(b) => b.defence(slot),
-                #[cfg(feature = "cuda")]
-                Inner::Gpu(b) => b.defence(slot),
-            })
-            .collect::<Result<Vec<_>, String>>()
-            .map_err(refuse)?;
-        self.planes(py, planes)
+        self.plane_rows(py, Plane::Defence)
     }
 
     /// The maximum health the unit panel displays (a carrier: its passenger's unless it has
     /// Protect) of each unit the player to move sees, int16 `[games, size * size]`, -1
     /// elsewhere and in slots not playing. Shows a seen foreign carrier's passenger through
-    /// it, as the game's screen does. Needs `outputs=("max_health",)`; the cpu backend only.
+    /// it, as the game's screen does. Needs `outputs=("max_health",)`.
     fn max_health<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
-        self.asked("max_health")?;
-        let b = self.cpu("max_health")?;
-        let planes = (0..b.len())
-            .map(|slot| b.max_health(slot))
-            .collect::<Result<Vec<_>, String>>()
-            .map_err(refuse)?;
-        self.planes(py, planes)
+        self.plane_rows(py, Plane::MaxHealth)
+    }
+
+    /// The movement the unit panel displays (with boost, Swift, Bubble and poison) of each unit
+    /// the player to move sees, int16 `[games, size * size]`, -1 elsewhere and in slots not
+    /// playing. Shows a seen foreign unit's effects. Needs `outputs=("movement",)`.
+    fn movement<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.plane_rows(py, Plane::Movement)
+    }
+
+    /// The attack modifier the unit panel displays (tenths of the attack: 50 when boosted, else
+    /// 0) of each unit the player to move sees, int16 `[games, size * size]`, -1 elsewhere and
+    /// in slots not playing. Needs `outputs=("attack_modifier",)`.
+    fn attack_modifier<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.plane_rows(py, Plane::AttackModifier)
+    }
+
+    /// The stars per turn each city the player to move sees gives it, as the city displays
+    /// them (units hidden from it absent), int16 `[games, size * size]`, -1 elsewhere and in
+    /// slots not playing. Needs `outputs=("city_work",)`.
+    fn city_work<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.plane_rows(py, Plane::CityWork)
+    }
+
+    /// The population slots taken by units homed in each own city (units hidden from the
+    /// player to move absent; another player's unit homed there counts), int16 `[games, size *
+    /// size]`, -1 elsewhere and in slots not playing. Needs `outputs=("city_units",)`.
+    fn city_units<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.plane_rows(py, Plane::CityUnits)
+    }
+
+    /// 1 on an explored, owned city with another player's unit the player to move sees in it,
+    /// 0 on other explored tiles, -1 elsewhere and in slots not playing; not who. Int16
+    /// `[games, size * size]`. Needs `outputs=("city_siege",)`.
+    fn city_siege<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.plane_rows(py, Plane::CitySiege)
+    }
+
+    /// The sides of each explored tile where its owner's territory ends, as bits (1 north,
+    /// y + 1; 2 south; 4 east; 8 west), int16 `[games, size * size]`, -1 elsewhere and in slots
+    /// not playing. Shows whether an unexplored neighbour has the same owner, as the game's
+    /// border does. Needs `outputs=("border_edges",)`.
+    fn border_edges<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i16>>> {
+        self.plane_rows(py, Plane::BorderEdges)
     }
 
     /// The income the player to move is shown (units hidden from it count as absent), int32
-    /// `[games]`, -1 in slots not playing. Needs `outputs=("income",)`; the cpu backend only.
+    /// `[games]`, -1 in slots not playing. Needs `outputs=("income",)`.
     fn income<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i32>>> {
         self.asked("income")?;
-        let b = self.cpu("income")?;
-        let out = (0..b.len())
-            .map(|slot| b.income(slot).map(|v| v.unwrap_or(-1)))
+        self.inner.sync().map_err(refuse)?;
+        let out = (0..self.inner.len())
+            .map(|slot| self.inner.income(slot).map(|v| v.unwrap_or(-1)))
             .collect::<Result<Vec<i32>, String>>()
             .map_err(refuse)?;
         Ok(Array1::from_vec(out).into_pyarray(py))
+    }
+
+    /// The score of each city the player to move sees (a foreign city's shows its population
+    /// progress, as the building popup does), int32 `[games, size * size]`, -1 elsewhere and in
+    /// slots not playing. Needs `outputs=("city_score",)`.
+    fn city_score<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i32>>> {
+        self.asked("city_score")?;
+        self.inner.sync().map_err(refuse)?;
+        let rows = (0..self.inner.len())
+            .map(|slot| self.inner.city_score(slot))
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(refuse)?;
+        self.rows(py, (self.size as usize).pow(2), rows)
+    }
+
+    /// The player to move's progression row (see `PROGRESSION`: units lost, start tile,
+    /// revealed resources, monuments, tasks, lighthouses, embassies), int32 `[games,
+    /// PROGRESSION_LEN]`, -1 past each list's end and in slots not playing. Needs
+    /// `outputs=("progression",)`.
+    fn progression<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<i32>>> {
+        self.asked("progression")?;
+        self.inner.sync().map_err(refuse)?;
+        let rows = (0..self.inner.len())
+            .map(|slot| self.inner.progression(slot))
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(refuse)?;
+        self.rows(py, PROGRESSION_LEN, rows)
     }
 
     fn __len__(&self) -> usize {
@@ -850,6 +921,14 @@ fn python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ],
     )?;
     m.add("OUTPUTS", OUTPUTS.to_vec())?;
+    m.add(
+        "PROGRESSION",
+        batch::outputs::PROGRESSION
+            .iter()
+            .map(|&(name, rows, fields)| (name, rows, fields.to_vec()))
+            .collect::<Vec<_>>(),
+    )?;
+    m.add("PROGRESSION_LEN", PROGRESSION_LEN)?;
     m.add("PREVIEW_FIELDS", batch::outputs::PREVIEW_FIELDS.to_vec())?;
     #[cfg(feature = "cuda")]
     m.add_class::<device::DeviceArray>()?;

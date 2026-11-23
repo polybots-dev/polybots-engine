@@ -12,6 +12,7 @@
 use engine_fast::menu;
 use engine_fast::reset::Config;
 use engine_fast::tables::Tables;
+use engine_fast_batch::outputs::Plane;
 use engine_fast_batch::{Applied, Batch, Status};
 use engine_fast_gpu::menu::twin_menu;
 use engine_fast_gpu::{state as device, tables};
@@ -653,7 +654,7 @@ fn a_cloak_infiltrates_as_in_the_engine() {
 }
 
 /// The attack previews and the defence plane. The defence
-/// plane equals `Batch::defence` at every decision; the host build's preview of each
+/// plane equals the batch's at every decision; the host build's preview of each
 /// legal row equals the CPU batch's (`Batch::previews`), row for row, over random games long
 /// enough for armies to meet, Attack rows with and without retaliation and lethal ones among
 /// them. Random play: a smoke test.
@@ -697,11 +698,14 @@ fn the_host_previews_and_defence_equal_the_batchs() {
                 batch.previews(0),
                 "seed {seed}, decision {decision}: previews"
             );
-            let defence = engine_fast_gpu::outputs::twin_defence(&block, &flat)
-                .unwrap_or_else(|e| panic!("{}", e.text));
+            let mover = g.players[g.current_player_index as usize].action.id;
+            let defence = engine_fast_gpu::outputs::twin_queries(&block, &flat, mover)
+                .unwrap()
+                .plane(Plane::Defence)
+                .to_vec();
             assert_eq!(
                 Some(defence.clone()),
-                batch.defence(0).unwrap(),
+                batch.plane(0, Plane::Defence).unwrap(),
                 "seed {seed}, decision {decision}: defence"
             );
             bonus += defence.iter().filter(|&&d| d > 10).count();

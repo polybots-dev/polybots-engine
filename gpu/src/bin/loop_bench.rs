@@ -5,7 +5,7 @@
 //! steps the finished slots are restarted on the CPU and uploaded, as a training loop would).
 //!
 //!   loop_bench SIZE GAMES CALLS WORKERS OUTPUTS [WINDOW [LIMIT [MODES]]]   (OUTPUTS 1: with
-//!   the previews and the defence plane, 0 without; WINDOW > 0: one JSON line per WINDOW calls
+//!   the previews and the defence plane, 2: with every optional output, 0 without; WINDOW > 0: one JSON line per WINDOW calls
 //!   with that window's figures and the host's resident memory, so the rate deep in games shows;
 //!   LIMIT: decisions before a game stops as truncated, default 10 000; MODES: 0 both, 1
 //!   step-only, 2 with resets, 3 the trained mix, 4 the trained mix overlapped with a model)
@@ -382,10 +382,10 @@ fn main() {
                 limit
             }
         };
-        let wanted = Outputs {
-            previews: outputs == 1,
-            defence: outputs == 1,
-            other_view: false,
+        let wanted = match outputs {
+            1 => Outputs::named(&["previews", "defence"]).unwrap(),
+            2 => Outputs::all(),
+            _ => Outputs::default(),
         };
         let free_before = engine_fast_gpu::device::memory().unwrap().0;
         let mut b = GpuBatch::with_outputs(CATALOG, games, workers, size, wanted).unwrap();
@@ -504,7 +504,7 @@ fn main() {
         println!(
             "{}",
             serde_json::json!({"mode": mode,
-                "size": size, "games": games, "outputs": outputs == 1, "calls": calls, "workers": workers, "gpu": gpu_name,
+                "size": size, "games": games, "outputs": outputs, "calls": calls, "workers": workers, "gpu": gpu_name,
                 "decisions": decisions, "restarted": restarted, "seconds": secs,
                 "decisions_per_second": decisions as f64 / secs,
                 "step_decisions_per_second": decisions as f64 / step_s,

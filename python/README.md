@@ -28,24 +28,24 @@ release has built packages:
 
 Windows x86_64:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-win_amd64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-win_amd64.whl
 
 Linux x86_64:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-manylinux_2_28_x86_64.whl
 
 Linux arm64:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-manylinux_2_28_aarch64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-manylinux_2_28_aarch64.whl
 
 macOS, Intel:
 
-    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.1.0/engine_fast-0.1.0-cp311-abi3-macosx_11_0_x86_64.whl
+    pip install https://github.com/polybots-dev/polybots-engine/releases/download/v0.2.0/engine_fast-0.2.0-cp311-abi3-macosx_11_0_x86_64.whl
 
 The repository's `wheels/` folder has two more; from the repository's top folder:
 
-    pip install wheels/macos/engine_fast-0.1.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
-    pip install wheels/cuda/engine_fast-0.1.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
+    pip install wheels/macos/engine_fast-0.2.0-cp311-abi3-macosx_11_0_arm64.whl   # macOS, Apple silicon
+    pip install wheels/cuda/engine_fast-0.2.0-cp311-abi3-linux_x86_64.whl         # Linux x86_64, CPU and GPU
 
 The release's Linux wheels need glibc 2.28 or later (Ubuntu 22.04: use its `python3.11`
 package, since its own Python is 3.10). The CUDA wheel is not a manylinux wheel (built with
@@ -195,13 +195,43 @@ without one computes nothing for it and refuses its call. `OUTPUTS` lists them. 
 the game's own screen shows, which can be more than the view: for example a seen enemy's
 defence bonus, which depends on that player's technologies.
 
+Each output is for the player to move: one row per slot, -1 in slots not playing. The tile
+planes have one entry per tile (`y * size + x`, like the view's), -1 where the output has no
+answer. On the GPU backend `device_arrays()` has each output under its own name, in the same
+layout. Several show what the screen shows but the view does not, such as a seen enemy unit's
+boosts or a foreign city's population progress, so none is computed unless asked for.
+
 | Output | Call | Shape | What |
 | --- | --- | --- | --- |
 | `previews` | `previews()` | int16 `[rows, 4]`, one row per row of `moves()` | an attack's forecast: present, damage shown on the target, damage shown on the attacker (-1: the lethal icon, or no retaliation), flags (1 kills the target, 2 the attacker dies, 4 retaliation shows); `PREVIEW_FIELDS` names them |
-| `defence` | `defence()` | int16 `[games, size * size]` | the defence bonus in tenths (10: none) of each unit with an info panel for the player to move, -1 elsewhere |
-| `income` | `income()` | int32 `[games]` | the income the player to move is shown; -1 for slots not playing. CPU backend only |
-| `max_health` | `max_health()` | int16 `[games, size * size]` | the maximum health a unit's info panel shows (a carrier shows its passenger's), -1 elsewhere. CPU backend only |
+| `defence` | `defence()` | int16 `[games, size * size]` | the defence bonus in tenths (10: none; 15 a terrain bonus; 40 a wall) of each unit with an info panel |
+| `max_health` | `max_health()` | int16 `[games, size * size]` | the maximum health a unit's info panel shows (a carrier shows its passenger's) |
+| `movement` | `movement()` | int16 `[games, size * size]` | the movement a unit's panel shows: its kind's, +1 boosted, +1 with Swift or Bubble, -1 poisoned (at least 1) |
+| `attack_modifier` | `attack_modifier()` | int16 `[games, size * size]` | added to a unit's attack, in tenths: 50 when boosted, else 0 |
+| `income` | `income()` | int32 `[games]` | the stars per turn the player to move is shown |
+| `city_work` | `city_work()` | int16 `[games, size * size]` | per city the player has explored, the stars per turn it gives them as the city shows it; 0 when another player's unit stands in it |
+| `city_units` | `city_units()` | int16 `[games, size * size]` | per own city, how many of its population slots (level + 1) its units take, whoever owns them now |
+| `city_siege` | `city_siege()` | int16 `[games, size * size]` | 1 on an explored city another player's seen unit stands in, 0 on other explored tiles |
+| `city_score` | `city_score()` | int32 `[games, size * size]` | per explored city, its score: base, (level + 1) x 50, progress x 5, and its monuments' growth |
+| `border_edges` | `border_edges()` | int16 `[games, size * size]` | per explored tile, the sides where its owner's territory ends, as bits: 1 north (y + 1), 2 south, 4 east, 8 west; 0 on an unowned tile |
+| `progression` | `progression()` | int32 `[games, PROGRESSION_LEN]` (73) | the player's lists in fixed rows: units lost, start tile, revealed resources, monuments, tasks, lighthouses and embassies (below) |
 | `other_view` | `other_views()` | as `views()` | the view of the next seat in turn order after the player to move, dead players skipped (when every other player is dead, the next of them); -1 in slots not playing. For a critic that may see more than the player, never as a policy's input. Raises while a slot holds a loaded live game |
+
+`progression` is the blocks of `PROGRESSION` in order, each `(name, rows, fields)`; a row past
+its list's end is -1 throughout:
+
+| Block | Columns | Rows x fields | Content |
+| --- | --- | --- | --- |
+| `units_lost` | 0 | 1 x 1 | the player's units lost |
+| `start_tile` | 1 | 1 x 1 | the player's start tile (-1 off the board) |
+| `revealed_resources` | 2 | 1 x 1 | the resource kinds the player's technologies show, as bits by kind |
+| `monuments` | 3 to 10 | 8 x `kind` | the monuments built, in order |
+| `tasks` | 11 to 40 | 10 x `kind`, `completed`, `counter` | each task: its kind, 1 if completed, the counter it keeps (peaceful turns, kills, conversions; -1 for tasks that keep none) |
+| `lighthouses` | 41 to 64 | 4 x `tile`, `explorer_1` to `explorer_5` | each lighthouse corner the player has explored: its tile and the seats that explored it, in order (0 past the end) |
+| `embassy` | 65 to 72 | 4 x `theirs`, `ours` | per row of `players()`: the level of that player's embassy in the player's capital, and of the player's in theirs (0: none) |
+
+Asking for every output slows a step by about a quarter to a third on the GPU; asking for none
+costs nothing.
 
 ## The action table
 
@@ -228,13 +258,14 @@ calls are CPU backend only.
 ## The GPU backend
 
 `Batch(..., backend="gpu")` gives the same results as the CPU backend through the same calls,
-except `load`, `command`, the action table's batch calls, `income` and `max_health`, which are
-CPU only. It also has a loop that stays on the GPU. `device_arrays`, `step_device`, `queue`,
-`queue_depth` and `restart_finished` raise on the CPU backend.
+except `load`, `command` and the action table's batch calls, which are CPU only. It also has a
+loop that stays on the GPU. `device_arrays`, `step_device`, `queue`, `queue_depth` and
+`restart_finished` raise on the CPU backend.
 - **`device_arrays()`** hands out the batch's arrays (statuses, legal moves, views, outputs) as
   CUDA arrays read in place, for example `torch.as_tensor(a, device="cuda")`. `DEVICE_ARRAYS`
-  names the arrays every batch has; the optional outputs add `previews`, `defence` and
-  `other_tiles`, `other_scalars`, `other_players`, `other_tech`. Their layouts are the device's:
+  names the arrays every batch has; each optional output adds its own name (`previews`,
+  `defence`, `max_health`, `movement` and so on), and `other_view` adds `other_tiles`,
+  `other_scalars`, `other_players`, `other_tech`. Their layouts are the device's:
   `moves` is `[games, rows, 6]` and `previews` `[games, rows, 4]`, padded past `counts`, and
   the per-slot arrays are int32. They change with every step; read them, never write them.
 - **`step_device(actions)`** takes a contiguous int32 CUDA array of one move index per slot (a

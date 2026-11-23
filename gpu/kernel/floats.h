@@ -59,12 +59,16 @@ EF_FN float ef_rebellion_terms(float weight, int terms) {
  * default rounding mode; rintf, never roundf) */
 EF_FN int32_t ef_damage_shown(int32_t raw) { return (int32_t)rintf((float)raw * 0.1f); }
 
+/* queries.rs panel: a displayed figure in tenths, (x as f32 * 0.1).ceil() as i32 (the maximum
+ * health) */
+EF_FN int32_t ef_tenths_up(int32_t x) { return ef_f32_i32(ceilf((float)x * 0.1f)); }
+
 /* ---- one entry point for the conformance check ---- */
 enum {
     EF_OP_TECH_PRICE, EF_OP_MOVE_PRIORITY, EF_OP_ROUTE_PRIORITY, EF_OP_UNDER_LIMIT, EF_OP_MEET_TIERS,
     EF_OP_HASH_VALUE, EF_OP_HASH_RANGE_F32, EF_OP_HASH_RANGE_I32, EF_OP_SAMPLE, EF_OP_NEXT_FLOAT,
     EF_OP_FLOAT_RANGE, EF_OP_MAX_OF, EF_OP_RANGE_OF, EF_OP_WIDE_RANGE, EF_OP_NAME_LENGTH,
-    EF_OP_NAME_SHORT, EF_OP_REBELLION, EF_OP_DAMAGE_SHOWN, EF_OP_COUNT
+    EF_OP_NAME_SHORT, EF_OP_REBELLION, EF_OP_DAMAGE_SHOWN, EF_OP_TENTHS_UP, EF_OP_COUNT
 };
 
 /* Evaluate expression `op` on raw 32-bit arguments (floats are passed as their bits) and give
@@ -91,6 +95,7 @@ EF_FN uint64_t ef_float_case(int32_t op, uint32_t a, uint32_t b, uint32_t c, uin
     /* the weight negated, as infiltrate.rs uses it for its sort key */
     case EF_OP_REBELLION: return ef_f32_bits(-ef_rebellion_terms(ef_rebellion_jitter(a), ib & 15));
     case EF_OP_DAMAGE_SHOWN: return (uint32_t)ef_damage_shown(ia);
+    case EF_OP_TENTHS_UP: return (uint32_t)ef_tenths_up(ia);
     default: return 0;
     }
 }

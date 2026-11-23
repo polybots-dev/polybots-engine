@@ -63,14 +63,30 @@ __device__ __noinline__ EfResult ef_device_slot(EfGame *g, const EfTables *t, Ef
 /* the optional outputs a batch is made with: each is
  * computed and allocated only when asked for */
 #define EF_WANT_PREVIEWS 1
-#define EF_WANT_DEFENCE 2
-#define EF_WANT_OTHER_VIEW 4
+#define EF_WANT_OTHER_VIEW 2
+#define EF_WANT_INCOME 4
+#define EF_WANT_CITY_SCORE 8
+#define EF_WANT_PROGRESSION 16
+#define EF_WANT_PLANE(k) (256 << (k))   /* outputs.h EF_PLANE_* */
+#define EF_WANT_ALL (EF_WANT_PREVIEWS | EF_WANT_OTHER_VIEW | EF_WANT_INCOME | EF_WANT_CITY_SCORE | EF_WANT_PROGRESSION \
+                     | (EF_WANT_PLANE(EF_PLANES) - EF_WANT_PLANE(0)))
+/* where the outputs from the game go (kernel/outputs.h), NULL for one not asked for: per plane
+ * `cells` int16 per slot, the income one int32 per slot, the city score `cells` int32 per slot,
+ * the progression EF_PROGRESSION_LEN int32 per slot. Kept in device memory behind one pointer:
+ * EfOut, passed by value to every slot kernel, stays the size it had before these outputs (a
+ * larger EfOut made k_slots fault on the 3090, CUDA error 700, with nothing asked for). */
+typedef struct EfOptional {
+    int16_t *planes[EF_PLANES];
+    int32_t *income, *city_score, *progression;
+} EfOptional;
+
 typedef struct {
     int32_t *scalars;
     int64_t *players;
     int16_t *tech;
     int16_t (*previews)[4];   /* EF_MAX_ROWS per slot, or NULL */
-    int16_t *defence;         /* cells per slot, or NULL */
+    /* the outputs from the game (EfOptional), in device memory; NULL when none was asked for */
+    const struct EfOptional *optional;
     /* the other seat's view (outputs.h ef_other_view) and its exported arrays, laid out as the
      * mover's; all NULL unless asked for */
     EfView *other_views;
@@ -99,8 +115,18 @@ __device__ void ef_slot_epilogue(int g, EfMenu *m, int32_t before, EfView *v, in
         for (int32_t k = len; k < top; k++)
             for (int f = 0; f < 4; f++) pv[k][f] = 0;
     }
-    if (o.defence && !playing)
-        for (int k = 0; k < o.cells; k++) o.defence[(size_t)g * (size_t)o.cells + (size_t)k] = -1;
+    const EfOptional *x = o.optional;
+    if (x && !playing) {
+        size_t at = (size_t)g * (size_t)o.cells;
+        for (int p = 0; p < EF_PLANES; p++)
+            if (x->planes[p])
+                for (int k = 0; k < o.cells; k++) x->planes[p][at + (size_t)k] = -1;
+        if (x->city_score)
+            for (int k = 0; k < o.cells; k++) x->city_score[at + (size_t)k] = -1;
+        if (x->income) x->income[g] = -1;
+        if (x->progression)
+            for (int k = 0; k < EF_PROGRESSION_LEN; k++) x->progression[(size_t)g * EF_PROGRESSION_LEN + (size_t)k] = -1;
+    }
     ef_export_view(g, v, playing, o.scalars, o.players, o.tech, o);
     if (o.other_views) {
         EfView *ov = (EfView *)((char *)o.other_views + o.view_size * (size_t)g);
@@ -137,6 +163,19 @@ __device__ void ef_export_view(int g, EfView *v, int shown, int32_t *scalars, in
     for (int k = 0; k < nt; k++) te[k] = v->tech[k];
 }
 
+/* Slot g's optional outputs from its game and the mover's view v, for the player to move. */
+__device__ __noinline__ EfResult ef_slot_outputs(int g, const EfGame *game, const EfTables *tables, const EfView *v,
+                                                 const EfOptional *x, int32_t cells) {
+    size_t at = (size_t)g * (size_t)cells;
+    EfQueryOut q;
+    for (int p = 0; p < EF_PLANES; p++) q.planes[p] = x->planes[p] ? x->planes[p] + at : 0;
+    q.income = x->income ? x->income + g : 0;
+    q.city_score = x->city_score ? x->city_score + at : 0;
+    if (ef_query_asked(&q)) EF_TRY(ef_query_outputs(game, tables, game->players[game->current_player_index].id, &q));
+    if (x->progression) ef_progression_row(game, v, x->progression + (size_t)g * EF_PROGRESSION_LEN);
+    return ef_ok();
+}
+
 /* Run slot g by `index` (-2 refresh after an upload, k take row k), only while its block has
  * passed its check (on upload) and every run since; a slot that stops keeps its reason until a
  * new upload, and its status says Refused or Failed. */
@@ -152,9 +191,8 @@ __device__ EfResult ef_run_slot(int g, EfGame *games, EfCaps caps, const EfTable
     /* the optional outputs of a slot left playing, for its player to move */
     if (r.code == EF_OK && status[g] == EF_PLAYING && o.previews)
         r = ef_menu_previews(game, tables, m, o.previews + (size_t)g * EF_MAX_ROWS);
-    if (r.code == EF_OK && status[g] == EF_PLAYING && o.defence)
-        r = ef_defence_plane(game, tables, game->players[game->current_player_index].id,
-                             o.defence + (size_t)g * (size_t)o.cells);
+    if (r.code == EF_OK && status[g] == EF_PLAYING && o.optional)
+        r = ef_slot_outputs(g, game, tables, EF_VIEW_AT(views, caps, g), o.optional, o.cells);
     if (r.code == EF_OK && status[g] == EF_PLAYING && o.other_views)
         r = ef_other_view(game, tables, (EfView *)((char *)o.other_views + o.view_size * (size_t)g));
     if (r.code != EF_OK) {
@@ -454,6 +492,7 @@ struct EfDevice {
      * codes of the last device step, its status word, and the bytes copied to and from the host
      * by every call on this batch (ef_copy) */
     EfOut out;
+    EfOptional optional;   /* the host's copy of out.optional (all NULL when none was asked for) */
     int32_t *d_applied;
     uint32_t *d_word;
     uint64_t to_device, to_host;
@@ -509,7 +548,11 @@ void ef_cuda_destroy(EfDevice *d) {
     cudaFree(d->out.players);
     cudaFree(d->out.tech);
     cudaFree(d->out.previews);
-    cudaFree(d->out.defence);
+    for (int p = 0; p < EF_PLANES; p++) cudaFree(d->optional.planes[p]);
+    cudaFree(d->optional.income);
+    cudaFree(d->optional.city_score);
+    cudaFree(d->optional.progression);
+    cudaFree((void *)d->out.optional);
     cudaFree(d->out.other_views);
     cudaFree(d->out.other_scalars);
     cudaFree(d->out.other_players);
@@ -527,7 +570,7 @@ void ef_cuda_destroy(EfDevice *d) {
  * *error when it fails. */
 EfDevice *ef_cuda_create(int32_t games, int32_t tile_cap, int32_t unit_cap, int32_t techs, int32_t outputs, int32_t *error) {
     EfCaps caps = {tile_cap, unit_cap};
-    if (games <= 0 || !ef_caps_ok(caps) || techs < 0 || techs > 4096 || (outputs & ~(EF_WANT_PREVIEWS | EF_WANT_DEFENCE | EF_WANT_OTHER_VIEW))) {
+    if (games <= 0 || !ef_caps_ok(caps) || techs < 0 || techs > 4096 || (outputs & ~EF_WANT_ALL)) {
         *error = (int)cudaErrorInvalidValue;
         return NULL;
     }
@@ -560,9 +603,29 @@ EfDevice *ef_cuda_create(int32_t games, int32_t tile_cap, int32_t unit_cap, int3
         e = cudaMalloc((void **)&d->out.previews, n * EF_MAX_ROWS * sizeof(int16_t[4]));
         if (e == cudaSuccess) e = cudaMemset(d->out.previews, 0, n * EF_MAX_ROWS * sizeof(int16_t[4]));
     }
-    if (e == cudaSuccess && (outputs & EF_WANT_DEFENCE)) {
-        e = cudaMalloc((void **)&d->out.defence, n * (size_t)tile_cap * sizeof(int16_t));
-        if (e == cudaSuccess) e = cudaMemset(d->out.defence, 0xFF, n * (size_t)tile_cap * sizeof(int16_t));
+    /* all bits set: -1 in every entry until the slot runs */
+    for (int p = 0; p < EF_PLANES; p++)
+        if (e == cudaSuccess && (outputs & EF_WANT_PLANE(p))) {
+            e = cudaMalloc((void **)&d->optional.planes[p], n * (size_t)tile_cap * sizeof(int16_t));
+            if (e == cudaSuccess) e = cudaMemset(d->optional.planes[p], 0xFF, n * (size_t)tile_cap * sizeof(int16_t));
+        }
+    if (e == cudaSuccess && (outputs & EF_WANT_INCOME)) {
+        e = cudaMalloc((void **)&d->optional.income, n * sizeof(int32_t));
+        if (e == cudaSuccess) e = cudaMemset(d->optional.income, 0xFF, n * sizeof(int32_t));
+    }
+    if (e == cudaSuccess && (outputs & EF_WANT_CITY_SCORE)) {
+        e = cudaMalloc((void **)&d->optional.city_score, n * (size_t)tile_cap * sizeof(int32_t));
+        if (e == cudaSuccess) e = cudaMemset(d->optional.city_score, 0xFF, n * (size_t)tile_cap * sizeof(int32_t));
+    }
+    if (e == cudaSuccess && (outputs & EF_WANT_PROGRESSION)) {
+        e = cudaMalloc((void **)&d->optional.progression, n * EF_PROGRESSION_LEN * sizeof(int32_t));
+        if (e == cudaSuccess) e = cudaMemset(d->optional.progression, 0xFF, n * EF_PROGRESSION_LEN * sizeof(int32_t));
+    }
+    if (e == cudaSuccess && (outputs & (EF_WANT_ALL & ~(EF_WANT_PREVIEWS | EF_WANT_OTHER_VIEW)))) {
+        EfOptional *x = NULL;
+        e = cudaMalloc((void **)&x, sizeof(EfOptional));
+        if (e == cudaSuccess) e = cudaMemcpy(x, &d->optional, sizeof(EfOptional), cudaMemcpyHostToDevice);
+        d->out.optional = x;
     }
     if (e == cudaSuccess && (outputs & EF_WANT_OTHER_VIEW)) {
         size_t t = (size_t)(techs > 0 ? techs : 1);
@@ -849,7 +912,8 @@ int ef_cuda_device_name(char *name, int32_t capacity) {
  * from tiles + g * view_stride (EF_VIEW_PLANES planes of `cells` int16 each). */
 typedef struct {
     uint64_t status, winners, counts, applied, rows, tiles, scalars, players, tech;
-    uint64_t previews, defence;   /* 0 unless the batch was made with them */
+    uint64_t previews;   /* 0 unless the batch was made with them */
+    uint64_t plane_outputs[EF_PLANES], income, city_score, progression;   /* the same */
     uint64_t other_tiles, other_scalars, other_players, other_tech;   /* the same */
     uint64_t menu_stride, view_stride;
     int32_t max_rows, planes, cells, techs;
@@ -866,7 +930,10 @@ int ef_cuda_exports(EfDevice *d, EfExports *x) {
     x->players = (uint64_t)(uintptr_t)d->out.players;
     x->tech = (uint64_t)(uintptr_t)d->out.tech;
     x->previews = (uint64_t)(uintptr_t)d->out.previews;
-    x->defence = (uint64_t)(uintptr_t)d->out.defence;
+    for (int p = 0; p < EF_PLANES; p++) x->plane_outputs[p] = (uint64_t)(uintptr_t)d->optional.planes[p];
+    x->income = (uint64_t)(uintptr_t)d->optional.income;
+    x->city_score = (uint64_t)(uintptr_t)d->optional.city_score;
+    x->progression = (uint64_t)(uintptr_t)d->optional.progression;
     x->other_tiles = d->out.other_views ? (uint64_t)(uintptr_t)((char *)d->out.other_views + sizeof(EfView)) : 0;
     x->other_scalars = (uint64_t)(uintptr_t)d->out.other_scalars;
     x->other_players = (uint64_t)(uintptr_t)d->out.other_players;

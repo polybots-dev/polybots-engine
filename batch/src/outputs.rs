@@ -1,9 +1,7 @@
-//! Optional outputs of the batch (the attack previews, defence bonus and
-//! city income are engine outputs every model may read, and so is the displayed
-//! maximum health of a unit). Each is asked
-//! for on its own and costs nothing unless asked for; none is part of the view, since some
-//! show what the view hides (engine-fast/src/queries.rs lists which). `other_view` is the
-//! privileged critic's input: it is never an actor's input.
+//! Optional outputs of the batch. Each is asked for on its own and costs nothing unless asked for; none is part
+//! of the view, since some show what the view hides (engine-fast/src/queries.rs lists which).
+//! `other_view` is the privileged critic's input: it is never an
+//! actor's input.
 
 use crate::{as_move, sort_key, Applied, Batch, Move, Status, SKIP};
 use engine_fast::menu;
@@ -48,20 +46,187 @@ pub fn legal_previews(g: &Game, t: &Tables) -> Result<(Vec<Move>, Vec<[i16; 4]>)
     Ok(out.into_iter().unzip())
 }
 
-/// The defence plane of `g` for `viewer`: what `Batch::defence` gives for a slot holding `g`
-/// whose player to move is `viewer`.
-pub fn defence_plane(g: &Game, t: &Tables, viewer: i32) -> Result<Vec<i16>, String> {
-    let mut out = UnitStats::default();
-    queries::unit_stats(g, t, viewer, &mut out)?;
-    Ok(out.defence)
+/// The optional outputs a batch can be made with, by name.
+pub const OUTPUTS: [&str; 13] = [
+    "previews",
+    "defence",
+    "income",
+    "max_health",
+    "other_view",
+    "movement",
+    "attack_modifier",
+    "city_work",
+    "city_units",
+    "city_siege",
+    "city_score",
+    "border_edges",
+    "progression",
+];
+
+/// The optional outputs that are one int16 plane over the tiles for the player to move
+/// (`queries::UNKNOWN` where it has no answer), in the order the GPU batch keeps them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plane {
+    /// `unit_stats`' defence bonus in tenths (10: none)
+    Defence,
+    /// `unit_stats`' maximum health, as the unit panel displays it
+    MaxHealth,
+    /// `unit_stats`' movement with the unit's effects applied
+    Movement,
+    /// `unit_stats`' attack modifier (tenths of the displayed attack; 50 when boosted)
+    AttackModifier,
+    /// `queries::city_work`, masked
+    CityWork,
+    /// `queries::city_units`, masked
+    CityUnits,
+    /// `queries::city_siege`, masked and without the besieger
+    CitySiege,
+    /// `queries::border_edges`
+    BorderEdges,
 }
 
-/// The maximum health plane of `g` for `viewer`, as the unit panel displays it: what
-/// `Batch::max_health` gives for a slot holding `g` whose player to move is `viewer`.
-pub fn max_health_plane(g: &Game, t: &Tables, viewer: i32) -> Result<Vec<i16>, String> {
-    let mut out = UnitStats::default();
-    queries::unit_stats(g, t, viewer, &mut out)?;
-    Ok(out.max_health)
+impl Plane {
+    pub const ALL: [Plane; 8] = [
+        Plane::Defence,
+        Plane::MaxHealth,
+        Plane::Movement,
+        Plane::AttackModifier,
+        Plane::CityWork,
+        Plane::CityUnits,
+        Plane::CitySiege,
+        Plane::BorderEdges,
+    ];
+
+    /// Its name in `OUTPUTS`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Plane::Defence => "defence",
+            Plane::MaxHealth => "max_health",
+            Plane::Movement => "movement",
+            Plane::AttackModifier => "attack_modifier",
+            Plane::CityWork => "city_work",
+            Plane::CityUnits => "city_units",
+            Plane::CitySiege => "city_siege",
+            Plane::BorderEdges => "border_edges",
+        }
+    }
+
+    pub fn named(name: &str) -> Option<Plane> {
+        Plane::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// The plane of `g` for `viewer`: what `Batch::plane` gives for a slot holding `g` whose
+    /// player to move is `viewer`.
+    pub fn of(self, g: &Game, t: &Tables, viewer: i32) -> Result<Vec<i16>, String> {
+        let mut out = Vec::new();
+        match self {
+            Plane::Defence | Plane::MaxHealth | Plane::Movement | Plane::AttackModifier => {
+                let mut s = UnitStats::default();
+                queries::unit_stats(g, t, viewer, &mut s)?;
+                out = match self {
+                    Plane::Defence => s.defence,
+                    Plane::MaxHealth => s.max_health,
+                    Plane::Movement => s.movement,
+                    _ => s.attack_modifier,
+                };
+            }
+            Plane::CityWork => queries::city_work(g, t, viewer, &mut out)?,
+            Plane::CityUnits => queries::city_units(g, viewer, &mut out),
+            Plane::CitySiege => queries::city_siege(g, viewer, &mut out),
+            Plane::BorderEdges => queries::border_edges(g, viewer, &mut out),
+        }
+        Ok(out)
+    }
+}
+
+/// The `city_score` plane of `g` for `viewer` (int32: a score need not fit int16).
+pub fn city_score_plane(g: &Game, t: &Tables, viewer: i32) -> Vec<i32> {
+    let mut out = Vec::new();
+    queries::city_score(g, t, viewer, &mut out);
+    out
+}
+
+/// `progression`'s blocks in order, each `rows` rows of `fields`: the viewer's units lost,
+/// start tile and revealed resource kinds (bits by kind); its monuments in the order built;
+/// its tasks as stored (`View::tasks`); the lighthouses on board corners it has explored, with
+/// the seats that explored each in order (0 past the end); and per row of `players` (the
+/// viewer, then the players it has met) the embassy levels both ways. A row past the list's
+/// end is -1 throughout.
+pub const PROGRESSION: [(&str, usize, &[&str]); 7] = [
+    ("units_lost", 1, &["units_lost"]),
+    ("start_tile", 1, &["start_tile"]),
+    ("revealed_resources", 1, &["revealed_resources"]),
+    ("monuments", MONUMENTS, &["kind"]),
+    ("tasks", TASKS, &["kind", "completed", "counter"]),
+    (
+        "lighthouses",
+        LIGHTHOUSES,
+        &[
+            "tile",
+            "explorer_1",
+            "explorer_2",
+            "explorer_3",
+            "explorer_4",
+            "explorer_5",
+        ],
+    ),
+    // `theirs`: that player's embassy in the viewer's capital (the viewer's relation record
+    // of it); `ours`: the viewer's in that player's (its record of the viewer)
+    ("embassy", VIEW_SEATS, &["theirs", "ours"]),
+];
+pub const MONUMENTS: usize = 8;
+pub const TASKS: usize = 10;
+pub const LIGHTHOUSES: usize = 4;
+/// int32 entries in one `progression` row
+pub const PROGRESSION_LEN: usize = 3 + MONUMENTS + TASKS * 3 + LIGHTHOUSES * 6 + VIEW_SEATS * 2;
+
+/// The embassy level `of` keeps in its relation record of `other` (0 without one).
+fn embassy(g: &Game, of: i32, other: i32) -> i32 {
+    g.player(of)
+        .and_then(|p| p.relation(other))
+        .map_or(0, |r| r.embassy_level)
+}
+
+/// `v`, the view of `g` for its viewer, laid out as one `progression` row. Refuses a view
+/// larger than the row.
+pub fn progression_row(g: &Game, v: &View, out: &mut [i32]) -> Result<(), String> {
+    if out.len() != PROGRESSION_LEN
+        || v.monuments.len() > MONUMENTS
+        || v.tasks.len() > TASKS
+        || v.lighthouses.len() > LIGHTHOUSES
+        || v.players.len() > VIEW_SEATS
+    {
+        return Err("a view larger than its progression row".into());
+    }
+    out.fill(-1);
+    let viewer = i32::from(v.viewer);
+    out[0] = v.units_lost;
+    out[1] = i32::from(v.start_tile);
+    out[2] = v.revealed_resources as i32;
+    let (monuments, rest) = out[3..].split_at_mut(MONUMENTS);
+    for (slot, &m) in monuments.iter_mut().zip(&v.monuments) {
+        *slot = i32::from(m);
+    }
+    let (tasks, rest) = rest.split_at_mut(TASKS * 3);
+    for (row, task) in tasks.chunks_mut(3).zip(&v.tasks) {
+        row.copy_from_slice(&[
+            i32::from(task.kind),
+            i32::from(task.completed),
+            task.counter,
+        ]);
+    }
+    let (lighthouses, embassies) = rest.split_at_mut(LIGHTHOUSES * 6);
+    for (row, l) in lighthouses.chunks_mut(6).zip(&v.lighthouses) {
+        row[0] = i32::from(l.tile);
+        for (slot, &e) in row[1..].iter_mut().zip(&l.explorers) {
+            *slot = i32::from(e);
+        }
+    }
+    for (row, p) in embassies.chunks_mut(2).zip(&v.players) {
+        let seat = i32::from(p.seat);
+        row.copy_from_slice(&[embassy(g, viewer, seat), embassy(g, seat, viewer)]);
+    }
+    Ok(())
 }
 
 /// The other seat's view of `g` (`turns::other_seat`: the next player in turn order after
@@ -141,12 +306,12 @@ impl Batch {
             .collect()
     }
 
-    /// The defence bonus of every unit the mover sees that has an info panel, one plane over
-    /// the tiles (`queries::UNKNOWN` elsewhere), from `queries::unit_stats`. Can show hidden
-    /// state: a foreign unit's effects and its owner's techs. None when the slot is not playing.
-    pub fn defence(&self, slot: usize) -> Result<Option<Vec<i16>>, String> {
+    /// Plane `p` for the player to move (`Plane::of`). Some show hidden state as the game's
+    /// screen does. None when the slot is not
+    /// playing.
+    pub fn plane(&self, slot: usize, p: Plane) -> Result<Option<Vec<i16>>, String> {
         self.playing(slot)
-            .map(|(g, mover)| defence_plane(g, &self.tables, mover))
+            .map(|(g, mover)| p.of(g, &self.tables, mover))
             .transpose()
     }
 
@@ -159,14 +324,23 @@ impl Batch {
             .transpose()
     }
 
-    /// The maximum health the unit panel displays for every unit the mover sees that has one
-    /// (a carrier shows its passenger's unless it has Protect), one plane over the tiles
-    /// (`queries::UNKNOWN` elsewhere). Shows a seen foreign carrier's passenger through it, as
-    /// the game's screen does. None when the slot is not playing.
-    pub fn max_health(&self, slot: usize) -> Result<Option<Vec<i16>>, String> {
+    /// The score of each city the player to move sees (`queries::city_score`; a foreign
+    /// city's shows its population progress, as the building popup does). None when the slot
+    /// is not playing.
+    pub fn city_score(&self, slot: usize) -> Option<Vec<i32>> {
         self.playing(slot)
-            .map(|(g, mover)| max_health_plane(g, &self.tables, mover))
-            .transpose()
+            .map(|(g, mover)| city_score_plane(g, &self.tables, mover))
+    }
+
+    /// The player to move's `progression` row (`progression_row` of its view). None when the
+    /// slot is not playing.
+    pub fn progression(&self, slot: usize) -> Result<Option<Vec<i32>>, String> {
+        let (Some((g, _)), Some(v)) = (self.playing(slot), self.view(slot)) else {
+            return Ok(None);
+        };
+        let mut out = vec![0; PROGRESSION_LEN];
+        progression_row(g, v, &mut out)?;
+        Ok(Some(out))
     }
 
     /// The view of the next seat in turn order after the player to move (`other_view`), for

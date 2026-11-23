@@ -27,9 +27,10 @@ pub enum Op {
     NameShort,
     Rebellion,
     DamageShown,
+    TenthsUp,
 }
 
-pub const OPS: [Op; 18] = [
+pub const OPS: [Op; 19] = [
     Op::TechPrice,
     Op::MovePriority,
     Op::RoutePriority,
@@ -48,6 +49,7 @@ pub const OPS: [Op; 18] = [
     Op::NameShort,
     Op::Rebellion,
     Op::DamageShown,
+    Op::TenthsUp,
 ];
 
 extern "C" {

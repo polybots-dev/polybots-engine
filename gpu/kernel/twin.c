@@ -166,13 +166,32 @@ void ef_twin_coverage_read(int64_t *commands, int64_t *actions) {
 /* takes of the search scratch while another was held, since the process started (movement.h) */
 int64_t ef_twin_scratch_overlaps(void) { return __atomic_load_n(&ef_scratch_overlaps, __ATOMIC_RELAXED); }
 
-/* outputs.h ef_defence_plane for the player to move: one int16 per tile of `g` in `out` */
-int32_t ef_twin_defence(const EfGame *g, const EfTables *t, int16_t *out, int64_t *arg) {
+/* outputs.h ef_query_outputs on the host build, for `viewer`: every plane into `planes`
+ * (EF_PLANES planes of g->tile_count int16, in Plane order), the income into `income`, the city
+ * score into `city_score` (g->tile_count int32) */
+int32_t ef_twin_queries(const EfGame *g, const EfTables *t, int32_t viewer, int16_t *planes, int32_t *income,
+                        int32_t *city_score, int64_t *arg) {
+    EfQueryOut o;
+    for (int p = 0; p < EF_PLANES; p++) o.planes[p] = planes + (size_t)p * (size_t)g->tile_count;
+    o.income = income;
+    o.city_score = city_score;
     EfResult r = ef_game_check(g, g->tile_cap, g->unit_cap);
-    if (r.code == EF_OK) r = ef_defence_plane(g, t, g->players[g->current_player_index].id, out);
+    if (r.code == EF_OK) r = ef_query_outputs(g, t, viewer, &o);
     *arg = r.arg;
     return r.code;
 }
+
+/* outputs.h ef_progression_row of `viewer`'s view on the host build: the view into `view` (of
+ * ef_view_size(g->tile_cap) bytes), its row into `out` (EF_PROGRESSION_LEN int32) */
+int32_t ef_twin_progression(const EfGame *g, const EfTables *t, int32_t viewer, EfView *view, int32_t *out, int64_t *arg) {
+    EfResult r = ef_game_check(g, g->tile_cap, g->unit_cap);
+    if (r.code == EF_OK) r = ef_view_write(g, t, viewer, view);
+    if (r.code == EF_OK) ef_progression_row(g, view, out);
+    *arg = r.arg;
+    return r.code;
+}
+int32_t ef_twin_progression_len(void) { return EF_PROGRESSION_LEN; }
+int32_t ef_twin_planes(void) { return EF_PLANES; }
 
 /* outputs.h ef_other_view for the player to move; the view's viewer is EF_NONE when there is no
  * other seat */

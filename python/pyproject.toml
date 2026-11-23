@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "engine-fast"
-version = "0.1.0"
+version = "0.2.0"
 description = "A fast Polytopia rules engine: many games per call, views and legal moves out."
 readme = "README.md"
 license = "Apache-2.0"

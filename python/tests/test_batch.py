@@ -247,48 +247,114 @@ class BatchTest(unittest.TestCase):
 
 
 
+HOST_OUTPUTS = {
+    "defence": (np.int16, "cells"),
+    "max_health": (np.int16, "cells"),
+    "movement": (np.int16, "cells"),
+    "attack_modifier": (np.int16, "cells"),
+    "city_work": (np.int16, "cells"),
+    "city_units": (np.int16, "cells"),
+    "city_siege": (np.int16, "cells"),
+    "border_edges": (np.int16, "cells"),
+    "city_score": (np.int32, "cells"),
+    "income": (np.int32, None),
+    "progression": (np.int32, engine_fast.PROGRESSION_LEN),
+}
+
+
+def host_outputs(batch):
+    return {name: getattr(batch, name)() for name in HOST_OUTPUTS}
+
+
 class OutputsTest(unittest.TestCase):
-    """The `income` and `max_health` outputs (the cpu backend only). Their values are
-    checked against the per-game queries in the batch crate's `tests/outputs.rs`."""
+    """The optional outputs beside `previews` and `other_view`, on both backends. Their values
+    are checked against the per-game queries in the batch crate's `tests/outputs.rs`, the GPU's
+    against the CPU batch's in the gpu crate's `tests/device_loop.rs`, and for hidden state in
+    the lockstep crate's non-interference test."""
 
     def test_shapes_types_and_their_relation_to_the_view(self):
         games, size = 4, 11
-        batch = engine_fast.Batch(games=games + 1, size=size, outputs=("income", "max_health"))
+        batch = engine_fast.Batch(games=games + 1, size=size, outputs=tuple(HOST_OUTPUTS))
         batch.reset(np.arange(games), np.arange(1, games + 1), [7, 7, 7])
         rng = np.random.default_rng(3)
         shown = 0
         for _ in range(150):
             status = batch.status()
-            income, max_health = batch.income(), batch.max_health()
-            self.assertEqual((income.dtype, income.shape), (np.int32, (games + 1,)))
-            self.assertEqual((max_health.dtype, max_health.shape), (np.int16, (games + 1, size * size)))
-            # slots not playing (the last one is never started) have none
-            self.assertTrue((income[status != 1] == -1).all())
-            self.assertTrue((max_health[status != 1] == -1).all())
-            self.assertTrue((income[status == 1] >= 0).all())
+            out = host_outputs(batch)
+            for name, (dtype, width) in HOST_OUTPUTS.items():
+                shape = (games + 1,) if width is None else (games + 1, size * size if width == "cells" else width)
+                self.assertEqual((out[name].dtype, out[name].shape), (dtype, shape), name)
+                # slots not playing (the last one is never started) have none
+                self.assertTrue((out[name][status != 1] == -1).all(), name)
+            self.assertTrue((out["income"][status == 1] >= 0).all())
             tiles = batch.views()[0]
             owner = tiles[:, engine_fast.TILE_PLANES.index("unit_owner")]
-            panel = max_health >= 0
-            # a unit's maximum health shows only where the view shows the unit (a carrier's is
-            # its passenger's, so it is not compared with the carrier's health)
+            panel = out["max_health"] >= 0
+            # a unit's panel shows only where the view shows the unit (a carrier's maximum
+            # health is its passenger's, so it is not compared with the carrier's health)
             self.assertTrue((owner[panel] > 0).all())
+            for name in ("defence", "movement", "attack_modifier"):
+                self.assertTrue(((out[name] >= 0) == panel).all(), name)
+            explored = tiles[:, engine_fast.TILE_PLANES.index("explored")] == 1
+            city = tiles[:, engine_fast.TILE_PLANES.index("improvement")] == 1
+            self.assertTrue(((out["city_score"] >= 0) == (explored & city)).all())
+            self.assertTrue(((out["border_edges"] >= 0) == explored).all())
             shown += int(panel.sum())
             offsets, moves = batch.moves()
             batch.step(choose(offsets, moves, status, rng))
         self.assertGreater(shown, 0)
 
+    def test_the_progression_layout(self):
+        self.assertEqual(sum(rows * len(fields) for _, rows, fields in engine_fast.PROGRESSION), engine_fast.PROGRESSION_LEN)
+        self.assertEqual([b[0] for b in engine_fast.PROGRESSION],
+                         ["units_lost", "start_tile", "revealed_resources", "monuments", "tasks", "lighthouses", "embassy"])
+        batch = engine_fast.Batch(games=1, size=11, outputs=("progression",))
+        batch.reset(np.arange(1), np.arange(1, 2), [7, 7])
+        row = batch.progression()[0]
+        _, scalars, players, _ = batch.views()
+        self.assertEqual(row[0], 0)  # no unit lost yet
+        # a task row is -1 throughout past the list's end, else a kind and a completed mark
+        for kind, completed, _ in row[11:41].reshape(10, 3):
+            self.assertTrue(kind == completed == -1 or (kind >= 0 and completed in (0, 1)))
+        # the embassy rows follow the player rows
+        embassy = row[-8:].reshape(4, 2)
+        self.assertTrue(((embassy[:, 0] >= 0) == (players[0, :, 0] >= 0)).all())
+
     def test_an_output_not_asked_for_is_refused(self):
         batch = engine_fast.Batch(games=1, size=11, outputs=("income",))
         batch.reset(np.arange(1), np.arange(1, 2), [7, 7])
         self.assertEqual(batch.income().shape, (1,))
-        with self.assertRaisesRegex(ValueError, "max_health"):
-            batch.max_health()
+        for name in HOST_OUTPUTS:
+            if name != "income":
+                with self.assertRaisesRegex(ValueError, name):
+                    getattr(batch, name)()
         with self.assertRaisesRegex(ValueError, "unknown output"):
             engine_fast.Batch(games=1, outputs=("health",))
-        for output in ("income", "max_health"):
-            with self.assertRaisesRegex(ValueError, "cpu backend only"):
-                engine_fast.Batch(games=1, backend="gpu", outputs=(output,))
 
+    def test_the_gpu_backend_hands_out_the_cpu_batchs(self):
+        games, size = 6, 11
+        try:
+            gpu = engine_fast.Batch(games=games, size=size, backend="gpu", outputs=engine_fast.OUTPUTS)
+        except ValueError as e:
+            self.skipTest(str(e))
+        cpu = engine_fast.Batch(games=games, size=size, outputs=engine_fast.OUTPUTS)
+        for b in (cpu, gpu):
+            b.reset(np.arange(games), np.arange(11, 11 + games), [7, 2, 4])
+        arrays = gpu.device_arrays()
+        cells = size * size
+        for name, (_, width) in HOST_OUTPUTS.items():
+            shape = (games,) if width is None else (games, cells if width == "cells" else width)
+            self.assertEqual(tuple(arrays[name].shape), shape, name)
+        rng = np.random.default_rng(5)
+        for call in range(80):
+            want, got = host_outputs(cpu), host_outputs(gpu)
+            for name in HOST_OUTPUTS:
+                self.assertTrue(np.array_equal(want[name], got[name]), f"call {call}: {name}")
+            status = cpu.status()
+            offsets, moves = cpu.moves()
+            m = choose(offsets, moves, status, rng)
+            cpu.step(m)
+            gpu.step(m)
 
 
 class OtherView(unittest.TestCase):

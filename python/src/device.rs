@@ -3,6 +3,7 @@
 //! version 3), and a policy's actions taken from a CUDA array. Nothing here copies per-game
 //! data between the host and the device.
 
+use engine_fast_batch::outputs::{Plane, PROGRESSION_LEN};
 use engine_fast_gpu::device::{on_device, Exports};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -62,9 +63,11 @@ impl DeviceArray {
 /// `tiles` (int16 `[games, len(TILE_PLANES), size * size]`), `scalars` (int32 `[games,
 /// len(SCALAR_FIELDS)]`), `players` (int64 `[games, 4, len(PLAYER_FIELDS)]`) and `tech`
 /// (int16 `[games, technology ids]`), laid out as the host calls hand them out (-1 rows for
-/// slots not playing); with the optional outputs also `previews`, `defence`, and the other
-/// seat's view as `other_tiles`, `other_scalars`, `other_players` and `other_tech`, laid out
-/// as the mover's (`other_views`).
+/// slots not playing); with the optional outputs also each by its name in `OUTPUTS` (`previews`
+/// int16 `[games, max_rows, 4]`; the planes int16 `[games, size * size]`; `income` int32
+/// `[games]`; `city_score` int32 `[games, size * size]`; `progression` int32 `[games,
+/// PROGRESSION_LEN]`), and the other seat's view as `other_tiles`, `other_scalars`,
+/// `other_players` and `other_tech`, laid out as the mover's (`other_views`).
 pub fn arrays<'py>(
     py: Python<'py>,
     owner: PyObject,
@@ -112,14 +115,33 @@ pub fn arrays<'py>(
             x.previews,
         ));
     }
-    if x.defence != 0 {
+    let cells = x.cells as u64;
+    for p in Plane::ALL {
+        if x.plane_outputs[p as usize] != 0 {
+            list.push((
+                p.name().to_owned(),
+                "<i2",
+                vec![g, cells],
+                None,
+                x.plane_outputs[p as usize],
+            ));
+        }
+    }
+    if x.income != 0 {
+        list.push(per_slot("income", x.income));
+    }
+    if x.city_score != 0 {
         list.push((
-            "defence".to_owned(),
-            "<i2",
-            vec![g, x.cells as u64],
+            "city_score".to_owned(),
+            "<i4",
+            vec![g, cells],
             None,
-            x.defence,
+            x.city_score,
         ));
+    }
+    if x.progression != 0 {
+        let row = vec![g, PROGRESSION_LEN as u64];
+        list.push(("progression".to_owned(), "<i4", row, None, x.progression));
     }
     if x.other_tiles != 0 {
         list.extend([

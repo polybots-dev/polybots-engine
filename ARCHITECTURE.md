@@ -86,7 +86,7 @@ This file goes from the top down:
 | --- | --- |
 | `frame/src/lib.rs` | value types shared by the crates: coordinates, actions, legal-list entries, attack previews |
 | `batch/src/lib.rs` | `Batch`: slots, `reset`, `step`, statuses, legal moves and views |
-| `batch/src/outputs.rs` | the batch's optional outputs (attack previews, defence, income, maximum health, the other seat's view) and stepping by action-table slot |
+| `batch/src/outputs.rs` | the batch's optional outputs (attack previews, a unit panel's defence, maximum health, movement and attack modifier, income, city work, units, siege and score, border edges, the progression lists, the other seat's view) and stepping by action-table slot |
 | `batch/src/table.rs` | the action table: its layout (`SCHEMA`), encoding a legal move to a slot and back, the legal mask |
 | `batch/src/bin/batch_bench.rs`, `table_check.rs` | CPU throughput benchmark; the action table's coverage over random games |
 | `gpu/kernel/` | the rules in C: one header per area, mirroring `src/` (`step.h`, `menu.h`, `view.h`, ...); `twin.c` builds them for the host, `device.cu` for CUDA |
@@ -198,8 +198,9 @@ distributed.
 | `tests/mangrove.rs` | a board feature no rule makes is refused on import |
 | `tests/wire.rs`, `batch/tests/load.rs` | a stored state (a seeded game with placeholder account ids) is read as pinned, what is not a whole state is refused, and a loaded slot plays for the account to move and for no other |
 | `batch/tests/matches_single_games.rs` | the batch plays each game exactly as the single-game calls do, at any number of threads |
-| `batch/tests/outputs.rs` | the income and maximum-health outputs equal the queries and a second statement of the rule |
+| `batch/tests/outputs.rs` | each output equals its query at every decision; maximum health and the progression lists also equal a second statement of their rule |
 | `batch/tests/other_view.rs`, `gpu/tests/other_view.rs` | the other seat's view is the view of the player the turn passes to next, dead players skipped unless every other player is dead; the GPU's equals the CPU batch's |
+| `gpu/tests/outputs.rs` | the host build of the output kernels equals the CPU batch for every seat at every decision, and a unit hidden from the player changes none of the outputs that must not show it |
 | `batch/tests/table.rs` | every legal move encodes to its own action-table slot and back, the mask holds exactly the legal moves, and stepping by slot plays as stepping by index |
 | `gpu/tests/step_lockstep.rs`, `menu_lockstep.rs`, `view.rs`, `special_lockstep.rs` | the C rules (host build, and the GPU with `cuda`) equal the Rust engine's step, legal moves and view at every decision of random games, special tribes included |
 | `gpu/tests/special_tribes.rs`, `naming.rs` | the special tribes' technology trees; city names drawn the same way on both sides |
